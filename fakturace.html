@@ -52,6 +52,24 @@
   .actions button:hover{opacity:.88;}
   .print-hint{font-family:Arial,Helvetica,sans-serif; font-size:11px; color:var(--muted); text-align:center; margin-top:6px;}
 
+  /* ============ HISTORIE ============ */
+  .history-link{display:block; width:100%; text-align:center; margin-top:12px; font-family:Arial,Helvetica,sans-serif; font-size:11.5px; letter-spacing:.04em; color:var(--muted); background:none; border:none; text-decoration:underline; cursor:pointer; padding:4px;}
+  .history-link:hover{color:var(--gold);}
+  .hist-overlay{position:fixed; inset:0; background:rgba(17,17,17,.45); display:flex; align-items:center; justify-content:center; z-index:50; padding:20px;}
+  .hist-overlay[hidden]{display:none;}
+  .hist-panel{background:var(--bg); border-top:4px solid var(--gold); max-width:480px; width:100%; max-height:80vh; overflow:auto; box-shadow:0 8px 30px rgba(0,0,0,.25);}
+  .hist-head{display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid var(--line); font-family:Arial,Helvetica,sans-serif; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted);}
+  .hist-head button{border:none; background:none; font-size:17px; line-height:1; cursor:pointer; color:var(--ink);}
+  .hist-head button:hover{color:var(--gold);}
+  .hist-body{padding:8px;}
+  .hist-empty{padding:22px 12px; text-align:center; font-family:Arial,Helvetica,sans-serif; font-size:13px; color:var(--muted);}
+  .hist-item{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px; border-bottom:1px solid var(--line); cursor:pointer; background:var(--paper);}
+  .hist-item:last-child{border-bottom:none;}
+  .hist-item:hover{background:#faf5e6;}
+  .hist-item .hi-num{font-weight:bold; color:var(--ink); white-space:nowrap;}
+  .hist-item .hi-cust{font-family:Arial,Helvetica,sans-serif; font-size:12px; color:var(--muted); flex:1; margin:0 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .hist-item .hi-amt{font-size:13px; font-weight:bold; white-space:nowrap;}
+
   /* ============ FAKTURA ============ */
   .inv-wrap{min-width:0;}
   .invoice{background:var(--paper); box-shadow:0 2px 14px rgba(0,0,0,.08); max-width:820px; margin:0 auto;}
@@ -122,6 +140,7 @@
     body{background:#fff; font-size:13px;}
     .app{display:block; padding:0; max-width:none;}
     .form-panel{display:none;}
+    .hist-overlay{display:none !important;}
     .invoice{box-shadow:none; max-width:none;}
     .inv-head{padding:16px 26px; -webkit-print-color-adjust:exact; print-color-adjust:exact;}
     .logo svg{width:42px; height:42px;}
@@ -160,7 +179,7 @@
 
     <div class="fld">
       <label for="f-num">Číslo faktury / variabilní symbol</label>
-      <input type="text" id="f-num" inputmode="numeric" value="260050">
+      <input type="text" id="f-num" inputmode="numeric" placeholder="(přidělí se při uložení)">
     </div>
 
     <div class="fld">
@@ -205,6 +224,7 @@
       <button type="button" class="ghost" id="btn-next">Nová faktura (číslo +1)</button>
     </div>
     <div class="print-hint">V tiskovém dialogu zvolte „Uložit jako PDF".</div>
+    <button type="button" class="history-link" id="btn-history">Historie posledních faktur</button>
   </div>
 
   <!-- ============ NÁHLED FAKTURY ============ -->
@@ -226,7 +246,7 @@
         </div>
         <div class="inv-title">
           <div class="it1">Faktura</div>
-          <div class="it2" id="v-num">260050</div>
+          <div class="it2" id="v-num">—</div>
         </div>
       </div>
 
@@ -257,7 +277,7 @@ www.tulectrendfoto.cz</div>
           <div><strong>Účet:</strong> 226152322/0600</div>
           <div><strong>IBAN:</strong> CZ75 0600 0000 0002 2615 2322</div>
           <div><strong>SWIFT:</strong> AGBACZPP</div>
-          <div><strong>Variabilní symbol:</strong> <span id="v-vs">260050</span></div>
+          <div><strong>Variabilní symbol:</strong> <span id="v-vs">—</span></div>
           <div><strong>Konstantní symbol:</strong> 0308</div>
           <div><strong>Způsob platby:</strong> Převodem</div>
         </div>
@@ -300,6 +320,18 @@ www.tulectrendfoto.cz</div>
         <span>Tulec Trend Photography — www.tulectrendfoto.cz</span>
       </div>
 
+    </div>
+  </div>
+</div>
+
+<div class="hist-overlay" id="hist-overlay" hidden>
+  <div class="hist-panel">
+    <div class="hist-head">
+      <span>Historie posledních faktur</span>
+      <button type="button" id="hist-close" aria-label="Zavřít historii">✕</button>
+    </div>
+    <div class="hist-body" id="hist-body">
+      <div class="hist-empty">Načítám…</div>
     </div>
   </div>
 </div>
@@ -2609,14 +2641,66 @@ var qrcode = function() {
 (function(){
   'use strict';
 
-  var LS_KEY = 'tt_inv_num';
   var items = [{d:'Fotoslužby', q:1, p:0}];
+  var finalizing = false;
+  var NUM_PLACEHOLDER = '(přidělí se při uložení)';
+  var API = {
+    cislo: '/.netlify/functions/faktura-cislo',
+    historie: '/.netlify/functions/faktura-historie'
+  };
+  var TOKEN_KEY = 'faktura_token';
 
   /* bezpečný přístup k localStorage — na mobilu v anonymním režimu nemusí být dostupný */
   var store = {
     get: function(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
     set: function(k, v){ try{ localStorage.setItem(k, v); }catch(e){} }
   };
+
+  /* ---------- token pro server ---------- */
+  function getToken(forcePrompt){
+    var t = store.get(TOKEN_KEY);
+    if(!t || forcePrompt){
+      try{
+        var entered = window.prompt('Zadejte přístupový token pro synchronizaci s serverem (zadává se jen jednou, uloží se v tomto prohlížeči):', '');
+        if(entered && entered.trim()){
+          t = entered.trim();
+          store.set(TOKEN_KEY, t);
+        }
+      }catch(e){
+        /* prompt() není v tomto prostředí k dispozici — pokračuj bez tokenu, další volání to vyřeší jako offline/401 */
+      }
+    }
+    return t || '';
+  }
+
+  /* ---------- volání serverových funkcí ---------- */
+  function callFn(url, method, bodyObj, tokenOverride){
+    var token = tokenOverride || getToken();
+    var opts = {
+      method: method,
+      headers: { 'Content-Type': 'application/json', 'x-faktura-token': token }
+    };
+    if(bodyObj !== undefined){ opts.body = JSON.stringify(bodyObj); }
+
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    if(controller){ opts.signal = controller.signal; }
+    var timer = controller ? setTimeout(function(){ controller.abort(); }, 8000) : null;
+
+    return fetch(url, opts).then(function(resp){
+      if(timer) clearTimeout(timer);
+      if(resp.status === 401){
+        store.set(TOKEN_KEY, '');
+        var fresh = getToken(true);
+        if(!fresh) return Promise.reject(new Error('unauthorized'));
+        return callFn(url, method, bodyObj, fresh);
+      }
+      if(!resp.ok) return Promise.reject(new Error('http-' + resp.status));
+      return resp.json();
+    }, function(err){
+      if(timer) clearTimeout(timer);
+      return Promise.reject(err);
+    });
+  }
 
   /* ---------- pomocné funkce ---------- */
   function el(id){ return document.getElementById(id); }
@@ -2636,29 +2720,6 @@ var qrcode = function() {
   }
   function escapeHtml(s){
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
-
-  /* ---------- číslo faktury ---------- */
-  function loadNum(){
-    var saved = store.get(LS_KEY);
-    if(saved){ el('f-num').value = saved; }
-  }
-  function saveNum(){
-    store.set(LS_KEY, el('f-num').value.trim());
-  }
-  function nextNum(){
-    var cur = parseInt(el('f-num').value.replace(/\D/g,''), 10);
-    var yy = new Date().getFullYear() % 100;
-    var next;
-    if(isNaN(cur)){
-      next = yy * 10000 + 1;               // např. 260001
-    } else if (Math.floor(cur / 10000) !== yy){
-      next = yy * 10000 + 1;               // nový rok → nová řada
-    } else {
-      next = cur + 1;
-    }
-    el('f-num').value = String(next);
-    saveNum();
   }
 
   /* ---------- položky ---------- */
@@ -2731,6 +2792,10 @@ var qrcode = function() {
   }
   function renderQR(num, total){
     var box = el('v-qr');
+    if(!num){
+      box.innerHTML = '<span style="font-size:11px;color:var(--muted);">QR se vygeneruje po přidělení čísla</span>';
+      return;
+    }
     try{
       var qr = qrcode(0, 'M');
       qr.addData(buildSPD(num, total));
@@ -2747,11 +2812,16 @@ var qrcode = function() {
   }
 
   function updatePreview(){
-    var num = el('f-num').value.replace(/\D/g,'') || '0';
+    var num = el('f-num').value.replace(/\D/g,'');
     var total = getTotal();
 
-    el('v-num').textContent = num;
-    el('v-vs').textContent = num;
+    if(num){
+      el('v-num').textContent = num;
+      el('v-vs').textContent = num;
+    } else {
+      el('v-num').textContent = NUM_PLACEHOLDER;
+      el('v-vs').textContent = '—';
+    }
 
     /* odběratel — první řádek tučně, další řádky pod ním */
     var lines = el('f-cust').value.split('\n').map(function(l){return l.trim();}).filter(Boolean);
@@ -2786,14 +2856,67 @@ var qrcode = function() {
     el('v-printed').textContent = 'Vystavil: Tomáš Tulec, ' + fmtDateCZ(toISO(today));
 
     renderQR(num, total);
-    saveNum();
   }
 
   el('f-num').addEventListener('input', updatePreview);
   el('f-cust').addEventListener('input', updatePreview);
 
+  /* ---------- přidělení čísla + tisk/PDF ---------- */
+  function assignNumber(manual){
+    var body = {};
+    if(manual !== null){ body.rucni = manual; }
+    return callFn(API.cislo, 'POST', body).then(function(json){ return json.cislo; });
+  }
+  function applyAssignedNumber(num){
+    el('f-num').value = String(num);
+    updatePreview();
+  }
+  function saveHistoryBestEffort(num){
+    var payload = {
+      cislo: String(num),
+      odberatel: el('f-cust').value,
+      castka: getTotal(),
+      datumVystaveni: el('f-iss').value,
+      datumSplatnosti: el('f-due').value,
+      polozky: items.filter(function(it){ return it.d || it.p; })
+    };
+    callFn(API.historie, 'POST', payload).catch(function(){
+      /* faktura je již vytištěná a číslo přidělené — chybu uložení historie jen tiše ignorujeme */
+    });
+  }
+
+  function finalizeAndPrint(){
+    if(finalizing) return;
+    finalizing = true;
+    var btn = el('btn-print');
+    btn.disabled = true;
+
+    var manualRaw = el('f-num').value.replace(/\D/g,'');
+    var manual = manualRaw ? parseInt(manualRaw, 10) : null;
+
+    assignNumber(manual).then(function(assigned){
+      applyAssignedNumber(assigned);
+      window.print();
+      saveHistoryBestEffort(assigned);
+    }).catch(function(){
+      if(manual !== null){
+        var proceed = window.confirm('Číslo faktury nelze ověřit (offline). Pokračovat s ručně zadaným číslem, nebo akci zrušit?');
+        if(proceed){
+          applyAssignedNumber(manual);
+          window.print();
+          saveHistoryBestEffort(manual);
+        }
+      } else {
+        window.alert('Číslo faktury nelze přidělit (jste offline nebo server neodpovídá) a v poli není zadáno žádné ruční číslo.\n\nZadejte prosím číslo ručně, nebo to zkuste znovu s připojením k internetu. Bez čísla nelze fakturu vytisknout.');
+      }
+    }).then(function(){
+      finalizing = false;
+      btn.disabled = false;
+    });
+  }
+
   /* ---------- akce ---------- */
-  el('btn-print').addEventListener('click', function(){ window.print(); });
+  el('btn-print').addEventListener('click', finalizeAndPrint);
 
   el('btn-mail').addEventListener('click', function(){
     var num = el('f-num').value.replace(/\D/g,'');
@@ -2813,12 +2936,67 @@ var qrcode = function() {
   });
 
   el('btn-next').addEventListener('click', function(){
-    nextNum();
+    el('f-num').value = '';
     items = [{d:'Fotoslužby', q:1, p:0}];
     el('f-cust').value = '';
     initDates();
     renderItems();
     updatePreview();
+  });
+
+  /* ---------- historie ---------- */
+  function openHistory(){
+    el('hist-overlay').hidden = false;
+    var body = el('hist-body');
+    body.innerHTML = '<div class="hist-empty">Načítám…</div>';
+    callFn(API.historie, 'GET').then(function(json){
+      renderHistoryList(json.faktury || []);
+    }).catch(function(){
+      body.innerHTML = '<div class="hist-empty">Historii se nepodařilo načíst (offline nebo chyba serveru).</div>';
+    });
+  }
+  function closeHistory(){
+    el('hist-overlay').hidden = true;
+  }
+  function renderHistoryList(list){
+    var body = el('hist-body');
+    if(!list.length){
+      body.innerHTML = '<div class="hist-empty">Zatím žádné uložené faktury.</div>';
+      return;
+    }
+    body.innerHTML = '';
+    list.forEach(function(f){
+      var row = document.createElement('div');
+      row.className = 'hist-item';
+      var custFirst = (f.odberatel || '').split('\n')[0].trim() || '—';
+      row.innerHTML =
+        '<span class="hi-num">č. ' + escapeHtml(String(f.cislo || '')) + '</span>' +
+        '<span class="hi-cust">' + escapeHtml(custFirst) + '</span>' +
+        '<span class="hi-amt">' + fmtMoney(Number(f.castka) || 0) + '</span>';
+      row.addEventListener('click', function(){
+        loadInvoiceIntoForm(f);
+        closeHistory();
+      });
+      body.appendChild(row);
+    });
+  }
+  function loadInvoiceIntoForm(f){
+    el('f-num').value = String(f.cislo || '');
+    el('f-cust').value = f.odberatel || '';
+    if(f.datumVystaveni){ el('f-iss').value = f.datumVystaveni; }
+    if(f.datumSplatnosti){ el('f-due').value = f.datumSplatnosti; }
+    markDueBtn(-1);
+    items = (Array.isArray(f.polozky) && f.polozky.length)
+      ? f.polozky.map(function(p){ return {d:p.d || '', q:Number(p.q) || 0, p:Number(p.p) || 0}; })
+      : [{d:'Fotoslužby', q:1, p:0}];
+    renderItems();
+    updatePreview();
+  }
+
+  el('btn-history').addEventListener('click', openHistory);
+  el('hist-close').addEventListener('click', closeHistory);
+  el('hist-overlay').addEventListener('click', function(e){
+    if(e.target === el('hist-overlay')) closeHistory();
   });
 
   /* ---------- inicializace ---------- */
@@ -2831,7 +3009,7 @@ var qrcode = function() {
     markDueBtn(3);
   }
 
-  loadNum();
+  getToken();
   initDates();
   renderItems();
   updatePreview();
