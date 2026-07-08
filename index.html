@@ -24,6 +24,7 @@
   .fld input:focus,.fld textarea:focus{outline:2px solid var(--gold); outline-offset:-1px; background:#fff;}
   .fld textarea{resize:vertical; min-height:64px; line-height:1.45;}
   .hint{font-family:Arial,Helvetica,sans-serif; font-size:11px; color:var(--muted); margin-top:4px;}
+  .hint-warn{color:#b04a3a;}
 
   .row2{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
 
@@ -179,7 +180,8 @@
 
     <div class="fld">
       <label for="f-num">Číslo faktury / variabilní symbol</label>
-      <input type="text" id="f-num" inputmode="numeric" placeholder="(přidělí se při uložení)">
+      <input type="text" id="f-num" inputmode="numeric" placeholder="">
+      <div class="hint hint-warn" id="f-num-hint" hidden></div>
     </div>
 
     <div class="fld">
@@ -2643,7 +2645,8 @@ var qrcode = function() {
 
   var items = [{d:'Fotoslužby', q:1, p:0}];
   var finalizing = false;
-  var NUM_PLACEHOLDER = '(přidělí se při uložení)';
+  var numTouchedByUser = false;
+  var NUM_EMPTY = '—';
   var API = {
     cislo: '/.netlify/functions/faktura-cislo',
     historie: '/.netlify/functions/faktura-historie'
@@ -2819,7 +2822,7 @@ var qrcode = function() {
       el('v-num').textContent = num;
       el('v-vs').textContent = num;
     } else {
-      el('v-num').textContent = NUM_PLACEHOLDER;
+      el('v-num').textContent = NUM_EMPTY;
       el('v-vs').textContent = '—';
     }
 
@@ -2858,8 +2861,36 @@ var qrcode = function() {
     renderQR(num, total);
   }
 
-  el('f-num').addEventListener('input', updatePreview);
+  function setNumHint(msg){
+    var h = el('f-num-hint');
+    if(!h) return;
+    h.textContent = msg || '';
+    h.hidden = !msg;
+  }
+
+  el('f-num').addEventListener('input', function(){
+    numTouchedByUser = true;
+    setNumHint('');
+    updatePreview();
+  });
   el('f-cust').addEventListener('input', updatePreview);
+
+  /* ---------- aktuální číslo faktury ze serveru ---------- */
+  function loadCurrentNumber(){
+    callFn(API.cislo, 'GET').then(function(json){
+      if(numTouchedByUser) return; /* uživatel mezitím číslo ručně zadal */
+      var num = json && json.dalsi;
+      if(num !== undefined && num !== null){
+        el('f-num').value = String(num);
+        setNumHint('');
+        updatePreview();
+      }
+    }).catch(function(){
+      if(numTouchedByUser) return;
+      setNumHint('Číslo nelze ověřit (offline)');
+      updatePreview();
+    });
+  }
 
   /* ---------- přidělení čísla + tisk/PDF ---------- */
   function assignNumber(manual){
@@ -2891,20 +2922,23 @@ var qrcode = function() {
     var btn = el('btn-print');
     btn.disabled = true;
 
-    var manualRaw = el('f-num').value.replace(/\D/g,'');
-    var manual = manualRaw ? parseInt(manualRaw, 10) : null;
+    var fieldRaw = el('f-num').value.replace(/\D/g,'');
+    var fieldNum = fieldRaw ? parseInt(fieldRaw, 10) : null;
+    /* pošli "rucni" jen když uživatel pole opravdu sám přepsal — jinak necháme
+       server přidělit aktuální číslo (mělo by odpovídat tomu zobrazenému) */
+    var manualForServer = numTouchedByUser ? fieldNum : null;
 
-    assignNumber(manual).then(function(assigned){
+    assignNumber(manualForServer).then(function(assigned){
       applyAssignedNumber(assigned);
       window.print();
       saveHistoryBestEffort(assigned);
     }).catch(function(){
-      if(manual !== null){
-        var proceed = window.confirm('Číslo faktury nelze ověřit (offline). Pokračovat s ručně zadaným číslem, nebo akci zrušit?');
+      if(fieldNum !== null){
+        var proceed = window.confirm('Číslo faktury nelze ověřit (offline). Pokračovat s číslem ' + fieldNum + ', nebo akci zrušit?');
         if(proceed){
-          applyAssignedNumber(manual);
+          applyAssignedNumber(fieldNum);
           window.print();
-          saveHistoryBestEffort(manual);
+          saveHistoryBestEffort(fieldNum);
         }
       } else {
         window.alert('Číslo faktury nelze přidělit (jste offline nebo server neodpovídá) a v poli není zadáno žádné ruční číslo.\n\nZadejte prosím číslo ručně, nebo to zkuste znovu s připojením k internetu. Bez čísla nelze fakturu vytisknout.');
@@ -2937,11 +2971,14 @@ var qrcode = function() {
 
   el('btn-next').addEventListener('click', function(){
     el('f-num').value = '';
+    numTouchedByUser = false;
+    setNumHint('');
     items = [{d:'Fotoslužby', q:1, p:0}];
     el('f-cust').value = '';
     initDates();
     renderItems();
     updatePreview();
+    loadCurrentNumber();
   });
 
   /* ---------- historie ---------- */
@@ -2982,6 +3019,8 @@ var qrcode = function() {
   }
   function loadInvoiceIntoForm(f){
     el('f-num').value = String(f.cislo || '');
+    numTouchedByUser = true; /* konkrétní historické číslo — při tisku se má znovu použít, ne nahradit novým */
+    setNumHint('');
     el('f-cust').value = f.odberatel || '';
     if(f.datumVystaveni){ el('f-iss').value = f.datumVystaveni; }
     if(f.datumSplatnosti){ el('f-due').value = f.datumSplatnosti; }
@@ -3013,6 +3052,7 @@ var qrcode = function() {
   initDates();
   renderItems();
   updatePreview();
+  loadCurrentNumber();
 })();
 </script>
 </body>
