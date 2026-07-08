@@ -1,5 +1,5 @@
 // Historie posledních 10 faktur (Netlify Blobs, store "faktury", klíč "historie").
-const { getStore } = require('@netlify/blobs');
+const { getStore, connectLambda } = require('@netlify/blobs');
 
 const KEY = 'historie';
 const MAX_ITEMS = 10;
@@ -47,6 +47,9 @@ function sanitizeInvoice(raw) {
 }
 
 exports.handler = async function (event) {
+  // funkce běží v CommonJS (Lambda compatibility mode) — Blobs kontext se
+  // v tomto režimu neinicializuje automaticky, je nutné ho napojit ručně
+  connectLambda(event);
   const headers = corsHeaders(event);
 
   if (event.httpMethod === 'OPTIONS') {

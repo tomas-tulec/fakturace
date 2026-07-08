@@ -1,5 +1,5 @@
 // Serverová synchronizace čísla faktury (Netlify Blobs, store "faktury", klíč "citac").
-const { getStore } = require('@netlify/blobs');
+const { getStore, connectLambda } = require('@netlify/blobs');
 
 const INIT_VALUE = 260050;
 const KEY = 'citac';
@@ -42,6 +42,9 @@ async function readCounter(store) {
 }
 
 exports.handler = async function (event) {
+  // funkce běží v CommonJS (Lambda compatibility mode) — Blobs kontext se
+  // v tomto režimu neinicializuje automaticky, je nutné ho napojit ručně
+  connectLambda(event);
   const headers = corsHeaders(event);
 
   if (event.httpMethod === 'OPTIONS') {
