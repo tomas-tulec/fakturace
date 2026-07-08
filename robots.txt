@@ -1,2 +1,7 @@
 User-agent: *
+Allow: /manifest.json
+Allow: /icon-32.png
+Allow: /icon-180.png
+Allow: /icon-192.png
+Allow: /icon-512.png
 Disallow: /
