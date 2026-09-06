@@ -11,7 +11,7 @@ function corsHeaders(event) {
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Headers': 'Content-Type, x-faktura-token',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
   };
   if (allowed.indexOf(origin) !== -1) {
     headers['Access-Control-Allow-Origin'] = origin;
@@ -60,6 +60,27 @@ exports.handler = async function (event) {
     if (event.httpMethod === 'GET') {
       const { value } = await readCounter(store);
       return { statusCode: 200, headers, body: JSON.stringify({ dalsi: value }) };
+    }
+
+    // Jednorázová oprava po odstranění chybně vystavené poslední faktury.
+    // Změna proběhne jen z přesného očekávaného stavu 260092 na 260091.
+    if (event.httpMethod === 'PATCH') {
+      let body = {};
+      try { body = event.body ? JSON.parse(event.body) : {}; } catch (e) { body = {}; }
+      if (Number(body.nastavitNa) !== 260091) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Neplatná cílová hodnota.' }) };
+      }
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const { value: counter, etag } = await readCounter(store);
+        if (counter !== 260092) {
+          return { statusCode: 409, headers, body: JSON.stringify({ error: 'Čítač už nemá očekávanou hodnotu.', aktualni: counter }) };
+        }
+        const result = await store.setJSON(KEY, 260091, { onlyIfMatch: etag });
+        if (result.modified) {
+          return { statusCode: 200, headers, body: JSON.stringify({ ok: true, dalsi: 260091 }) };
+        }
+      }
+      return { statusCode: 409, headers, body: JSON.stringify({ error: 'Čítač se mezitím změnil.' }) };
     }
 
     if (event.httpMethod === 'POST') {
