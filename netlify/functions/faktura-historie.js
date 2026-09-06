@@ -61,7 +61,9 @@ exports.handler = async function (event) {
   }
 
   try {
-    const store = getStore({ name: 'faktury', consistency: 'strong' });
+    // Stávající Lambda kontext neposkytuje adresu pro režim strong.
+    // Podmíněné zápisy stále chrání před přepsáním souběžné změny.
+    const store = getStore('faktury');
 
     // Mazání mění pouze historii, nikdy čítač faktur.
     if (event.httpMethod === 'DELETE') {
