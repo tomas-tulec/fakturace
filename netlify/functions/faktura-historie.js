@@ -11,7 +11,8 @@ function corsHeaders(event) {
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Headers': 'Content-Type, x-faktura-token',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Cache-Control': 'no-store',
   };
   if (allowed.indexOf(origin) !== -1) {
     headers['Access-Control-Allow-Origin'] = origin;
@@ -60,7 +61,33 @@ exports.handler = async function (event) {
   }
 
   try {
-    const store = getStore('faktury');
+    const store = getStore({ name: 'faktury', consistency: 'strong' });
+
+    // Mazání mění pouze historii, nikdy čítač faktur.
+    if (event.httpMethod === 'DELETE') {
+      let body;
+      try { body = JSON.parse(event.body || '{}'); } catch (e) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) };
+      }
+      const number = String((body && body.cislo) || '');
+      if (!/^\d{1,20}$/.test(number)) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid invoice number' }) };
+      }
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const existing = await store.getWithMetadata(KEY, { type: 'json' });
+        const list = Array.isArray(existing && existing.data) ? existing.data : [];
+        const remaining = list.filter(function (f) { return String(f && f.cislo) !== number; });
+        if (remaining.length === list.length) {
+          return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: false, faktury: list }) };
+        }
+        const result = await store.setJSON(KEY, remaining, { onlyIfMatch: existing.etag });
+        if (result.modified) {
+          return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: true, faktury: remaining }) };
+        }
+        // Při souběžné změně znovu načteme aktuální historii.
+      }
+      return { statusCode: 409, headers, body: JSON.stringify({ error: 'Concurrent update; retry' }) };
+    }
 
     if (event.httpMethod === 'GET') {
       const data = await store.get(KEY, { type: 'json' });

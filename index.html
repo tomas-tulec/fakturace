@@ -77,6 +77,9 @@
   .hist-item .hi-num{font-weight:bold; color:var(--ink); white-space:nowrap;}
   .hist-item .hi-cust{font-family:Arial,Helvetica,sans-serif; font-size:12px; color:var(--muted); flex:1; margin:0 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .hist-item .hi-amt{font-size:13px; font-weight:bold; white-space:nowrap;}
+  /* Mazání je dostupné pouze v panelu historie, nikoli na faktuře. */
+  .hist-delete{font:12px Georgia,serif; padding:5px 7px; border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer; flex-shrink:0;}
+  .hist-delete:hover{border-color:var(--gold);}
 
   /* ============ FAKTURA ============ */
   .inv-wrap{min-width:0;}
@@ -3049,6 +3052,23 @@ var qrcode = function() {
         loadInvoiceIntoForm(f);
         closeHistory();
       });
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'hist-delete';
+      remove.textContent = 'Smazat';
+      remove.addEventListener('click', function(event){
+        event.stopPropagation();
+        if(remove.disabled) return;
+        if(!window.confirm('Opravdu chcete smazat fakturu č. ' + f.cislo + ' z historie? Tuto akci nelze vrátit.')) return;
+        remove.disabled = true;
+        callFn(API.historie, 'DELETE', {cislo: String(f.cislo)}).then(function(json){
+          renderHistoryList(json.faktury || []);
+        }).catch(function(){
+          remove.disabled = false;
+          window.alert('Historii se nepodařilo načíst (offline nebo chyba serveru).');
+        });
+      });
+      row.appendChild(remove);
       body.appendChild(row);
     });
   }
