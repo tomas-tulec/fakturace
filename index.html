@@ -3101,24 +3101,6 @@ var qrcode = function() {
     if(e.target === el('hist-overlay')) closeHistory();
   });
 
-  /* Dočasné servisní tlačítko je dostupné jen přes přesný opravný parametr. */
-  if(window.location.search.indexOf('servis-citac=260093') !== -1){
-    var serviceButton = document.createElement('button');
-    serviceButton.type = 'button';
-    serviceButton.textContent = 'Nastavit další číslo na 260093';
-    serviceButton.addEventListener('click', function(){
-      serviceButton.disabled = true;
-      callFn(API.cislo, 'PATCH', {nastavitNa: 260093}).then(function(json){
-        window.alert('Další číslo faktury je ' + json.dalsi + '.');
-        window.location.reload();
-      }).catch(function(){
-        serviceButton.disabled = false;
-        window.alert('Čítač se nepodařilo opravit.');
-      });
-    });
-    el('btn-history').parentNode.insertBefore(serviceButton, el('btn-history'));
-  }
-
   /* ---------- inicializace ---------- */
   function initDates(){
     var t = new Date();
