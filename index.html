@@ -2654,6 +2654,7 @@ var qrcode = function() {
   var items = [{d:'Fotoslužby', q:1, p:0}];
   var finalizing = false;
   var numTouchedByUser = false;
+  var assignedInvoiceNumber = null;
   var NUM_EMPTY = '—';
   var API = {
     cislo: '/.netlify/functions/faktura-cislo',
@@ -2918,6 +2919,7 @@ var qrcode = function() {
 
   el('f-num').addEventListener('input', function(){
     numTouchedByUser = true;
+    assignedInvoiceNumber = null;
     setNumHint('');
     updatePreview();
   });
@@ -2950,11 +2952,14 @@ var qrcode = function() {
 
     var fieldRaw = el('f-num').value.replace(/\D/g,'');
     var fieldNum = fieldRaw ? parseInt(fieldRaw, 10) : null;
-    /* pošli "rucni" jen když uživatel pole opravdu sám přepsal — jinak necháme
-       server přidělit aktuální číslo (mělo by odpovídat tomu zobrazenému) */
-    var manualForServer = numTouchedByUser ? fieldNum : null;
+    /* Jakmile už server této faktuře číslo přidělil, další uložení PDF nebo tisk
+       musí použít stejné číslo. Nové číslo se žádá až po založení nové faktury. */
+    var manualForServer = assignedInvoiceNumber !== null
+      ? assignedInvoiceNumber
+      : (numTouchedByUser ? fieldNum : null);
 
     assignNumber(manualForServer).then(function(assigned){
+      assignedInvoiceNumber = assigned;
       applyAssignedNumber(assigned);
       performAction();
       saveHistoryBestEffort(assigned);
@@ -2962,6 +2967,7 @@ var qrcode = function() {
       if(fieldNum !== null){
         var proceed = window.confirm('Číslo faktury nelze ověřit (offline). Pokračovat s číslem ' + fieldNum + ', nebo akci zrušit?');
         if(proceed){
+          assignedInvoiceNumber = fieldNum;
           applyAssignedNumber(fieldNum);
           performAction();
           saveHistoryBestEffort(fieldNum);
@@ -3010,6 +3016,7 @@ var qrcode = function() {
   el('btn-next').addEventListener('click', function(){
     el('f-num').value = '';
     numTouchedByUser = false;
+    assignedInvoiceNumber = null;
     setNumHint('');
     items = [{d:'Fotoslužby', q:1, p:0}];
     el('f-cust').value = '';
@@ -3075,6 +3082,7 @@ var qrcode = function() {
   function loadInvoiceIntoForm(f){
     el('f-num').value = String(f.cislo || '');
     numTouchedByUser = true; /* konkrétní historické číslo — při tisku se má znovu použít, ne nahradit novým */
+    assignedInvoiceNumber = Number(f.cislo) || null;
     setNumHint('');
     el('f-cust').value = f.odberatel || '';
     if(f.datumVystaveni){ el('f-iss').value = f.datumVystaveni; }
