@@ -6,7 +6,7 @@ Statická fakturační aplikace s tiskem, PDF, QR platbou, serverovou historií 
 
 Hlavní soubor je `index.html`. Produkce: https://fakturace-tulec-trend-foto.netlify.app . Netlify nasazuje větev `main` repozitáře https://github.com/tomas-tulec/fakturace . Funkce jsou v `netlify/functions`; vyžadují Netlify Blobs a proměnnou `FAKTURA_TOKEN`. Hodnota tokenu nepatří do repozitáře.
 
-## Stav pracovní kopie k 5. 10. 2026
+## Stav produkce a pracovní kopie k 5. 10. 2026
 
 - Připraveno samostatné ukládání stejného PDF na Google Disk. Běžné tlačítko „Uložit PDF (do Stažených)“ zůstává nezávislé a nevyžaduje připojení Google.
 - Google přihlášení používá pouze rozsah `drive.file`, kontroluje přesný účet `tulectrendfoto@gmail.com`, před uložením zobrazuje účet a složku a nemění sdílení souborů.
@@ -15,10 +15,12 @@ Hlavní soubor je `index.html`. Produkce: https://fakturace-tulec-trend-foto.net
 - Testovací doklad `999001` používá pouze fiktivní údaje, výrazné označení „TEST – NEHRADIT“, neobsahuje QR platbu a nezapisuje se do číselné řady ani historie skutečných faktur.
 - Lokálně prošlo 10 automatizovaných testů: bezpečný výchozí bod i starší číselný stav `260124` v simulovaném úložišti, idempotentní opakování, ochrana změněného obsahu, souběžné přidělení, historie, test `999001`, rezervace jednoho souboru na Disku a veřejná konfigurace bez aplikačního tokenu.
 - V prohlížeči bylo ověřeno stažení testovacího PDF bez připojeného Googlu, responzivní rozložení při šířce 390 px a srozumitelná chyba při pokusu o Disk bez přihlášení. Vygenerované PDF má jednu stranu A4 a vizuálně prošlo kontrolou diakritiky a rozložení.
-- Dne 5. 10. 2026 byl na účtu `tulectrendfoto@gmail.com` vytvořen samostatný Google Cloud projekt `fakturace-tulec-trend-foto` bez připojeného fakturačního účtu. Jsou zapnutá pouze potřebná Google Drive API a Google Picker API; OAuth je v režimu Testing s jediným testovacím uživatelem `tulectrendfoto@gmail.com` a rozsahem `drive.file`. Webový OAuth klient má jako povolený původ pouze produkční adresu aplikace. Picker API klíč je omezen na tuto adresu a jediné API.
-- V Netlify jsou u existujícího projektu uložené proměnné `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_PICKER_API_KEY` a `GOOGLE_CLOUD_PROJECT_NUMBER`; první dvě jsou označené jako tajné. Netlify účet je na plánu Free bez uložené platební karty. Žádný klíč ani token není v tomto přehledu ani v repozitáři.
-- Skutečné přihlášení, výběr složky a nahrání testovacího PDF na Google Disk zatím nebyly ověřeny: nové serverové funkce nejsou nasazené. Postup a zbývající kontrolní body jsou v `GOOGLE-DISK-NASTAVENI.md`.
-- Produkční nasazení nebylo provedeno. Při čtení živé aplikace dne 5. 10. 2026 se ve formuláři po načtení zobrazilo číslo `999003`; nebyla vystavena ani uložena faktura. Uživatel si nastavení skutečného čísla provede následně sám přímo v aplikaci, proto zde číslování dále neřešíme. Produkční nasazení vyžaduje jeho výslovné schválení.
+- Dne 5. 10. 2026 byl na účtu `tulectrendfoto@gmail.com` vytvořen samostatný Google Cloud projekt `fakturace-tulec-trend-foto` bez připojeného fakturačního účtu. Google Drive API je zapnuté; OAuth je v režimu Testing s jediným testovacím uživatelem `tulectrendfoto@gmail.com` a rozsahem `drive.file`. Webový OAuth klient má jako povolený původ pouze produkční adresu aplikace.
+- Původní Google Picker byl při živém testu shledán nevhodným, protože předával přístupový token v adrese vloženého okna. Dne 5. 10. 2026 jej nahradil vlastní výběr složek vytvořených aplikací; požadavky na Drive API posílají token jen v autorizační hlavičce. Konfigurační funkce již do prohlížeče nevrací API klíč ani číslo projektu. Dříve vytvořený omezený Picker klíč a zapnuté Picker API již aplikace nepoužívá.
+- V Netlify zůstává použitý `GOOGLE_OAUTH_CLIENT_ID`; starší proměnné `GOOGLE_PICKER_API_KEY` a `GOOGLE_CLOUD_PROJECT_NUMBER` jsou nepoužívané. Netlify účet je na plánu Free bez uložené platební karty. Žádný klíč ani token není v tomto přehledu ani v repozitáři.
+- Produkční verze v commitech `8a41cd0` a `5e9dbb2` byla 5. 10. 2026 nasazena. V Chrome na tomto počítači bylo skutečně ověřeno přihlášení pouze účtem `tulectrendfoto@gmail.com`, vytvoření soukromé složky `Faktury Tulec Trend Foto`, přímé nahrání fiktivního testovacího PDF a jeho otevření na Disku. Náhled ukázal jednu stranu, fiktivního dodavatele i odběratele, označení `TEST – NEHRADIT`, českou diakritiku a `BEZ QR PLATBY`; Drive zobrazil `Soukromé pouze pro mě`.
+- Opakovaný testovací export vrátil stejný odkaz na soubor. V nové relaci bez připojeného Googlu se zobrazila srozumitelná výzva k připojení a nezávislé stažení testovacího PDF vytvořilo soubor v místní složce Stažené. Skutečné vypršení tokenu, mobilní telefon ani ChatGPT Work Cloud nebyly přímo otestovány.
+- Žádná skutečná faktura nebyla v rámci těchto testů vystavena ani odeslána. Uživatel si aktuální skutečné číslo upraví sám přímo v aplikaci; zde jej dále neřešíme. Postup používání a nastavení je v `GOOGLE-DISK-NASTAVENI.md`.
 
 ## Předchozí produkční stav k 7. 9. 2026
 
@@ -35,4 +37,4 @@ Hlavní soubor je `index.html`. Produkce: https://fakturace-tulec-trend-foto.net
 - Stávající Netlify Lambda kontext nepodporuje strong consistency. Používá se původní režim čtení a podmíněné zápisy s ETag; změny mohou při novém čtení mít prodlevu až 60 sekund.
 - Stávající netrackované soubory zůstaly nedotčené. `fakturace.html` se touto změnou neupravuje; produkční vstup je `index.html`.
 
-Další krok pro integraci Disku: v izolovaném náhledu provést přihlášení a nahrání výhradně testovacího PDF na firemní Disk. Produkční nasazení čeká na samostatné schválení. Uživatel si skutečné číslo následně upraví sám přímo v aplikaci. Běžné smazání z historie čítač automaticky nevrací a stažená PDF nejsou mazáním dotčena.
+Další krok: uživatel může aplikaci používat; před první skutečnou fakturou upraví požadované číslo a zkontroluje souhrn. Pro mobil a ChatGPT Work Cloud doporučujeme provést samostatný test bez vystavení skutečné faktury. Běžné smazání z historie čítač automaticky nevrací a stažená PDF nejsou mazáním dotčena.
