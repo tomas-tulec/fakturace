@@ -74,6 +74,10 @@
   .export-status.ok{color:#356b39;}
   .export-status.err{color:#b04a3a;}
   .export-status a{color:inherit; font-weight:bold;}
+  .drive-folder-panel{margin-top:10px; padding:10px; border:1px solid var(--line); background:#fff; font-size:12px;}
+  .drive-folder-panel[hidden]{display:none;}
+  .drive-folder-panel label{display:block; margin:8px 0 4px;}
+  .drive-folder-panel select{width:100%; padding:8px; border:1px solid var(--line); background:#fff; color:var(--ink);}
   .test-card{border-style:dashed;}
   .test-card p{font-size:11.5px; color:var(--muted); line-height:1.45; margin-bottom:8px;}
 
@@ -267,6 +271,16 @@
       <div class="export-controls">
         <button type="button" id="btn-drive-connect">Připojit Google Disk</button>
         <button type="button" id="btn-drive-folder" disabled>Vybrat cílovou složku</button>
+        <button type="button" id="btn-drive-disconnect" disabled>Odpojit Google Disk</button>
+      </div>
+      <div class="drive-folder-panel" id="drive-folder-panel" hidden>
+        <div>Vyberte složku vytvořenou touto aplikací nebo vytvořte novou soukromou složku na firemním Disku.</div>
+        <label for="drive-folder-list">Dostupné složky</label>
+        <select id="drive-folder-list"></select>
+        <div class="export-controls">
+          <button type="button" id="btn-drive-folder-select">Použít vybranou složku</button>
+          <button type="button" id="btn-drive-folder-create">Vytvořit soukromou složku Faktury Tulec Trend Foto</button>
+        </div>
       </div>
       <div class="export-status" id="drive-status" aria-live="polite"></div>
     </section>
@@ -2714,8 +2728,7 @@ var qrcode = function() {
     account: null,
     folderId: null,
     folderName: null,
-    tokenClient: null,
-    pickerReady: false
+    tokenClient: null
   };
 
   /* bezpečný přístup k localStorage — na mobilu v anonymním režimu nemusí být dostupný */
@@ -3195,7 +3208,7 @@ var qrcode = function() {
     if(drive.config) return Promise.resolve(drive.config);
     return fetchJson(API.googleConfig).then(function(config){
       if(!config.configured){
-        throw new Error('Google Disk zatím není nakonfigurován. Doplňte tři schválené proměnné prostředí v Netlify.');
+        throw new Error('Google Disk zatím není nakonfigurován. Zkontrolujte OAuth klienta v Netlify.');
       }
       if(config.allowedEmail !== ALLOWED_GOOGLE_ACCOUNT){
         throw new Error('Konfigurace povoleného Google účtu není správná.');
@@ -3207,20 +3220,10 @@ var qrcode = function() {
 
   function initializeGoogle(){
     return loadGoogleConfig().then(function(config){
-      return Promise.all([
-        loadScript('https://accounts.google.com/gsi/client'),
-        loadScript('https://apis.google.com/js/api.js')
-      ]).then(function(){
-        return new Promise(function(resolve, reject){
-          if(!window.gapi || !window.google || !google.accounts || !google.accounts.oauth2){
-            reject(new Error('Google knihovny nejsou dostupné.')); return;
-          }
-          gapi.load('picker', {
-            callback: function(){ drive.pickerReady = true; resolve(); },
-            onerror: function(){ reject(new Error('Výběr složky Google Disku se nepodařilo načíst.')); }
-          });
-        });
-      }).then(function(){
+      return loadScript('https://accounts.google.com/gsi/client').then(function(){
+        if(!window.google || !google.accounts || !google.accounts.oauth2){
+          throw new Error('Přihlášení Google není dostupné.');
+        }
         if(!drive.tokenClient){
           drive.tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: config.clientId,
@@ -3274,6 +3277,8 @@ var qrcode = function() {
       el('drive-account').textContent = email;
       el('drive-folder').textContent = 'Není vybrána';
       el('btn-drive-folder').disabled = false;
+      el('btn-drive-disconnect').disabled = false;
+      el('drive-folder-panel').hidden = true;
       setExportStatus('drive-status', 'Účet je bezpečně připojen. Nyní vyberte cílovou složku.', 'ok');
     });
   }
@@ -3281,10 +3286,51 @@ var qrcode = function() {
   function handleExpiredGoogleToken(error){
     if(error && error.status === 401){
       drive.accessToken = null;
+      drive.folderId = null;
+      drive.folderName = null;
+      el('drive-folder').textContent = 'Není vybrána';
+      el('drive-folder-panel').hidden = true;
       setExportStatus('drive-status', 'Přihlášení ke Google Disku vypršelo. Připojte účet znovu a opakujte uložení.', 'err');
       throw new Error('Přihlášení ke Google Disku vypršelo. Připojte účet znovu a opakujte uložení.');
     }
     throw error;
+  }
+
+  function listDriveFolders(){
+    var query = "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+    var fields = 'nextPageToken,files(id,name,mimeType,trashed,appProperties)';
+    var found = [];
+    function page(pageToken){
+      var url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(query) +
+        '&fields=' + encodeURIComponent(fields) + '&pageSize=1000';
+      if(pageToken) url += '&pageToken=' + encodeURIComponent(pageToken);
+      return fetchJson(url, {headers:googleHeaders()}).then(function(result){
+        found = found.concat((result.files || []).filter(function(folder){
+          return folder.appProperties && folder.appProperties.ttfKind === 'invoice-folder';
+        }));
+        return result.nextPageToken ? page(result.nextPageToken) : found;
+      });
+    }
+    return page(null).catch(handleExpiredGoogleToken);
+  }
+
+  function refreshDriveFolderList(){
+    return listDriveFolders().then(function(folders){
+      var list = el('drive-folder-list');
+      list.textContent = '';
+      folders.sort(function(a,b){ return a.name.localeCompare(b.name, 'cs'); });
+      folders.forEach(function(folder){
+        var option = document.createElement('option');
+        option.value = folder.id;
+        option.textContent = folder.name;
+        list.appendChild(option);
+      });
+      el('btn-drive-folder-select').disabled = folders.length === 0;
+      setExportStatus('drive-status', folders.length ?
+        'Vyberte cílovou složku ze seznamu.' :
+        'Zatím nemáte složku této aplikace. Vytvořte ji tlačítkem níže.', '');
+      return folders;
+    });
   }
 
   function chooseDriveFolder(){
@@ -3292,43 +3338,77 @@ var qrcode = function() {
       setExportStatus('drive-status', 'Nejprve připojte povolený Google účet.', 'err');
       return;
     }
-    if(!drive.pickerReady || !drive.config){
-      setExportStatus('drive-status', 'Výběr složky ještě není připraven. Připojte Google Disk znovu.', 'err');
-      return;
+    el('drive-folder-panel').hidden = false;
+    refreshDriveFolderList().catch(function(error){
+      setExportStatus('drive-status', error.message, 'err');
+    });
+  }
+
+  function selectDriveFolder(){
+    var folderId = el('drive-folder-list').value;
+    if(!folderId) return;
+    fetchJson('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(folderId) +
+      '?fields=id,name,mimeType,trashed,appProperties', {headers:googleHeaders()}).then(function(folder){
+      if(folder.trashed || folder.mimeType !== 'application/vnd.google-apps.folder' ||
+         !folder.appProperties || folder.appProperties.ttfKind !== 'invoice-folder'){
+        throw new Error('Vybraná položka není složka vytvořená touto aplikací.');
+      }
+      drive.folderId = folder.id;
+      drive.folderName = folder.name;
+      el('drive-folder').textContent = folder.name;
+      el('drive-folder-panel').hidden = true;
+      setExportStatus('drive-status', 'Před uložením je zobrazen firemní účet i cílová složka.', 'ok');
+    }).catch(function(error){
+      try{ handleExpiredGoogleToken(error); }catch(finalError){
+        setExportStatus('drive-status', finalError.message, 'err');
+      }
+    });
+  }
+
+  function createDriveFolder(){
+    var button = el('btn-drive-folder-create');
+    button.disabled = true;
+    listDriveFolders().then(function(folders){
+      var existing = folders.find(function(folder){ return folder.name === 'Faktury Tulec Trend Foto'; });
+      if(existing) return existing;
+      return fetchJson('https://www.googleapis.com/drive/v3/files?fields=' +
+        encodeURIComponent('id,name,mimeType,trashed,appProperties'), {
+        method:'POST',
+        headers:{Authorization:'Bearer ' + drive.accessToken, 'Content-Type':'application/json'},
+        body:JSON.stringify({
+          name:'Faktury Tulec Trend Foto',
+          mimeType:'application/vnd.google-apps.folder',
+          parents:['root'],
+          appProperties:{ttfKind:'invoice-folder'}
+        })
+      });
+    }).then(function(folder){
+      drive.folderId = folder.id;
+      drive.folderName = folder.name;
+      el('drive-folder').textContent = folder.name;
+      el('drive-folder-panel').hidden = true;
+      setExportStatus('drive-status', 'Soukromá složka je připravena. Před uložením je zobrazen účet i složka.', 'ok');
+    }).catch(function(error){
+      try{ handleExpiredGoogleToken(error); }catch(finalError){
+        setExportStatus('drive-status', finalError.message, 'err');
+      }
+    }).finally(function(){ button.disabled = false; });
+  }
+
+  function disconnectDrive(){
+    if(drive.accessToken && window.google && google.accounts && google.accounts.oauth2){
+      google.accounts.oauth2.revoke(drive.accessToken, function(){});
     }
-    var view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
-      .setIncludeFolders(true)
-      .setSelectFolderEnabled(true)
-      .setMode(google.picker.DocsViewMode.LIST);
-    var picker = new google.picker.PickerBuilder()
-      .setDeveloperKey(drive.config.apiKey)
-      .setAppId(drive.config.appId)
-      .setOAuthToken(drive.accessToken)
-      .setOrigin(window.location.origin)
-      .setTitle('Vyberte složku pro faktury Tulec Trend Foto')
-      .addView(view)
-      .setCallback(function(data){
-        if(data.action !== google.picker.Action.PICKED) return;
-        var doc = data.docs && data.docs[0];
-        if(!doc || !doc.id) return;
-        fetchJson('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(doc.id) + '?fields=id,name,mimeType,trashed', {
-          headers: googleHeaders()
-        }).then(function(folder){
-          if(folder.trashed || folder.mimeType !== 'application/vnd.google-apps.folder'){
-            throw new Error('Vybraná položka není dostupná složka Google Disku.');
-          }
-          drive.folderId = folder.id;
-          drive.folderName = folder.name;
-          el('drive-folder').textContent = folder.name;
-          setExportStatus('drive-status', 'Před uložením bude zobrazen účet i cílová složka.', 'ok');
-        }).catch(function(error){
-          try{ handleExpiredGoogleToken(error); }catch(finalError){
-            setExportStatus('drive-status', finalError.message, 'err');
-          }
-        });
-      })
-      .build();
-    picker.setVisible(true);
+    drive.accessToken = null;
+    drive.account = null;
+    drive.folderId = null;
+    drive.folderName = null;
+    el('drive-account').textContent = 'Nepřipojeno';
+    el('drive-folder').textContent = 'Není vybrána';
+    el('drive-folder-panel').hidden = true;
+    el('btn-drive-folder').disabled = true;
+    el('btn-drive-disconnect').disabled = true;
+    setExportStatus('drive-status', 'Google Disk byl odpojen. Běžné stažení PDF zůstává dostupné.', 'ok');
   }
 
   function generateDriveFileId(){
@@ -3457,6 +3537,9 @@ var qrcode = function() {
     requestGoogleAccess().catch(function(error){ setExportStatus('drive-status', error.message, 'err'); });
   });
   el('btn-drive-folder').addEventListener('click', chooseDriveFolder);
+  el('btn-drive-folder-select').addEventListener('click', selectDriveFolder);
+  el('btn-drive-folder-create').addEventListener('click', createDriveFolder);
+  el('btn-drive-disconnect').addEventListener('click', disconnectDrive);
 
   el('btn-drive').addEventListener('click', function(){
     if(!drive.accessToken || !drive.folderId){

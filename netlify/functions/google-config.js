@@ -1,4 +1,4 @@
-// Veřejná konfigurace Google Pickeru. Tyto identifikátory nejsou přístupové tokeny ani klientské tajemství.
+// Veřejná konfigurace přihlášení Google. Klientské tajemství ani přístupový token se nevrací.
 exports.handler = async function (event) {
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
@@ -8,16 +8,12 @@ exports.handler = async function (event) {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Metoda není podporována.' }) };
   }
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID || '';
-  const apiKey = process.env.GOOGLE_PICKER_API_KEY || '';
-  const appId = process.env.GOOGLE_CLOUD_PROJECT_NUMBER || '';
   return {
     statusCode: 200,
     headers,
     body: JSON.stringify({
-      configured: Boolean(clientId && apiKey && appId),
+      configured: Boolean(clientId),
       clientId,
-      apiKey,
-      appId,
       allowedEmail: 'tulectrendfoto@gmail.com',
     }),
   };

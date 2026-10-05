@@ -178,6 +178,8 @@ test('veřejná Google konfigurace neobsahuje interní fakturační token', asyn
   assert.equal(body.configured, true);
   assert.equal(body.allowedEmail, 'tulectrendfoto@gmail.com');
   assert.equal(response.body.includes('test-token'), false);
+  assert.equal(Object.hasOwn(body, 'apiKey'), false);
+  assert.equal(Object.hasOwn(body, 'appId'), false);
 });
 
 test('klient zachovává oddělené stažení a nejmenší rozsah drive.file', () => {
@@ -187,4 +189,6 @@ test('klient zachovává oddělené stažení a nejmenší rozsah drive.file', (
   assert.match(html, /https:\/\/www\.googleapis\.com\/auth\/drive\.file/);
   assert.doesNotMatch(html, /auth\/drive['"]/);
   assert.match(html, /TEST_Faktura_999001_NEHRADIT\.pdf/);
+  assert.doesNotMatch(html, /google\.picker|setOAuthToken|apis\.google\.com\/js\/api\.js/);
+  assert.match(html, /appProperties:\{ttfKind:'invoice-folder'\}/);
 });
