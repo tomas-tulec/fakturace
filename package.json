@@ -2,6 +2,9 @@
   "name": "fakturace-tulec-trend-foto",
   "private": true,
   "version": "1.0.0",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
   "dependencies": {
     "@netlify/blobs": "^10.0.0"
   }

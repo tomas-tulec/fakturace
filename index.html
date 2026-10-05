@@ -58,7 +58,24 @@
   .actions button.gold{background:var(--gold); border-color:var(--gold); color:var(--ink); font-weight:bold;}
   .actions button.ghost{background:none; color:var(--ink);}
   .actions button:hover{opacity:.88;}
+  .actions button:disabled{opacity:.45; cursor:not-allowed;}
   .print-hint{font-family:Arial,Helvetica,sans-serif; font-size:11px; color:var(--muted); text-align:center; margin-top:6px;}
+
+  /* ============ GOOGLE DISK A TESTOVACÍ EXPORT ============ */
+  .export-card{margin-top:14px; padding:13px; border:1px solid var(--line); background:#fbfaf7; font-family:Arial,Helvetica,sans-serif;}
+  .export-card h2{font-size:11px; letter-spacing:.1em; text-transform:uppercase; margin-bottom:9px;}
+  .export-row{font-size:12px; line-height:1.55; color:var(--muted); overflow-wrap:anywhere;}
+  .export-row strong{color:var(--ink); font-weight:600;}
+  .export-controls{display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:10px;}
+  .export-controls button{font-family:Arial,Helvetica,sans-serif; font-size:12px; padding:9px 7px; cursor:pointer; border:1px solid var(--ink); background:#fff; color:var(--ink);}
+  .export-controls button.primary{grid-column:1/-1; background:var(--ink); color:#fff;}
+  .export-controls button:disabled{opacity:.45; cursor:not-allowed;}
+  .export-status{min-height:17px; margin-top:8px; font-size:11.5px; line-height:1.45; color:var(--muted);}
+  .export-status.ok{color:#356b39;}
+  .export-status.err{color:#b04a3a;}
+  .export-status a{color:inherit; font-weight:bold;}
+  .test-card{border-style:dashed;}
+  .test-card p{font-size:11.5px; color:var(--muted); line-height:1.45; margin-bottom:8px;}
 
   /* ============ HISTORIE ============ */
   .history-link{display:block; width:100%; text-align:center; margin-top:12px; font-family:Arial,Helvetica,sans-serif; font-size:11.5px; letter-spacing:.04em; color:var(--muted); background:none; border:none; text-decoration:underline; cursor:pointer; padding:4px;}
@@ -132,6 +149,8 @@
   @media (max-width: 900px){
     .app{grid-template-columns:1fr; padding:12px; gap:16px;}
     .form-panel{position:static;}
+    .export-controls{grid-template-columns:1fr;}
+    .export-controls button.primary{grid-column:auto;}
     .inv-head{padding:18px 16px;}
     .inv-parties{grid-template-columns:1fr; gap:16px; padding:18px 16px 4px;}
     .inv-dates{padding:10px 16px; gap:18px; flex-wrap:wrap;}
@@ -233,11 +252,34 @@
 
     <div class="actions">
       <button type="button" class="gold" id="btn-pdf">Uložit PDF (do Stažených)</button>
+      <button type="button" id="btn-drive">Uložit PDF na Google Disk</button>
       <button type="button" id="btn-print">Vytisknout</button>
       <button type="button" id="btn-mail">Otevřít e-mail zákazníkovi</button>
       <button type="button" class="ghost" id="btn-next">Nová faktura (číslo +1)</button>
     </div>
     <div class="print-hint">PDF se uloží jako Faktura_ČÍSLO.pdf do složky Stažené.</div>
+
+    <section class="export-card" aria-labelledby="drive-title">
+      <h2 id="drive-title">Google Disk</h2>
+      <div class="export-row">Povolený účet: <strong>tulectrendfoto@gmail.com</strong></div>
+      <div class="export-row">Připojený účet: <strong id="drive-account">Nepřipojeno</strong></div>
+      <div class="export-row">Cílová složka: <strong id="drive-folder">Není vybrána</strong></div>
+      <div class="export-controls">
+        <button type="button" id="btn-drive-connect">Připojit Google Disk</button>
+        <button type="button" id="btn-drive-folder" disabled>Vybrat cílovou složku</button>
+      </div>
+      <div class="export-status" id="drive-status" aria-live="polite"></div>
+    </section>
+
+    <section class="export-card test-card" aria-labelledby="test-title">
+      <h2 id="test-title">Testovací export – nevystaví skutečnou fakturu</h2>
+      <p>Vytvoří jasně označený doklad 999001 „TEST – NEHRADIT“ pouze s fiktivními údaji. Číselná řada ani historie skutečných faktur se nezmění.</p>
+      <div class="export-controls">
+        <button type="button" id="btn-test-download">Stáhnout testovací PDF</button>
+        <button type="button" id="btn-test-drive">Uložit testovací PDF na Google Disk</button>
+      </div>
+      <div class="export-status" id="test-status" aria-live="polite"></div>
+    </section>
     <button type="button" class="history-link" id="btn-history">Historie posledních faktur</button>
   </div>
 
@@ -2655,17 +2697,32 @@ var qrcode = function() {
   var finalizing = false;
   var numTouchedByUser = false;
   var assignedInvoiceNumber = null;
+  var currentRequestId = null;
   var NUM_EMPTY = '—';
   var API = {
     cislo: '/.netlify/functions/faktura-cislo',
-    historie: '/.netlify/functions/faktura-historie'
+    historie: '/.netlify/functions/faktura-historie',
+    googleConfig: '/.netlify/functions/google-config',
+    driveReservation: '/.netlify/functions/google-drive-rezervace'
   };
   var TOKEN_KEY = 'faktura_token';
+  var DRAFT_KEY = 'faktura_draft_id';
+  var ALLOWED_GOOGLE_ACCOUNT = 'tulectrendfoto@gmail.com';
+  var drive = {
+    config: null,
+    accessToken: null,
+    account: null,
+    folderId: null,
+    folderName: null,
+    tokenClient: null,
+    pickerReady: false
+  };
 
   /* bezpečný přístup k localStorage — na mobilu v anonymním režimu nemusí být dostupný */
   var store = {
     get: function(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
-    set: function(k, v){ try{ localStorage.setItem(k, v); }catch(e){} }
+    set: function(k, v){ try{ localStorage.setItem(k, v); }catch(e){} },
+    remove: function(k){ try{ localStorage.removeItem(k); }catch(e){} }
   };
 
   /* ---------- token pro server ---------- */
@@ -2706,8 +2763,15 @@ var qrcode = function() {
         if(!fresh) return Promise.reject(new Error('unauthorized'));
         return callFn(url, method, bodyObj, fresh);
       }
-      if(!resp.ok) return Promise.reject(new Error('http-' + resp.status));
-      return resp.json();
+      return resp.json().catch(function(){ return {}; }).then(function(json){
+        if(!resp.ok){
+          var error = new Error(json.error || ('Chyba serveru (' + resp.status + ').'));
+          error.status = resp.status;
+          error.data = json;
+          throw error;
+        }
+        return json;
+      });
     }, function(err){
       if(timer) clearTimeout(timer);
       return Promise.reject(err);
@@ -2731,7 +2795,56 @@ var qrcode = function() {
     return d.getFullYear() + '-' + m + '-' + day;
   }
   function escapeHtml(s){
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function createRequestId(){
+    if(window.crypto && typeof window.crypto.randomUUID === 'function'){
+      return 'invoice-' + window.crypto.randomUUID();
+    }
+    return 'invoice-' + Date.now() + '-' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  }
+
+  function getRequestId(){
+    if(currentRequestId) return currentRequestId;
+    currentRequestId = store.get(DRAFT_KEY) || createRequestId();
+    store.set(DRAFT_KEY, currentRequestId);
+    return currentRequestId;
+  }
+
+  function resetRequestId(){
+    currentRequestId = createRequestId();
+    store.set(DRAFT_KEY, currentRequestId);
+  }
+
+  function stableInvoiceData(number){
+    return {
+      cislo: String(number || '').replace(/\D/g,''),
+      odberatel: el('f-cust').value,
+      castka: getTotal(),
+      datumVystaveni: el('f-iss').value,
+      datumSplatnosti: el('f-due').value,
+      polozky: items.filter(function(it){ return it.d || it.p; }).map(function(it){
+        return {d:String(it.d || ''), q:Number(it.q) || 0, p:Number(it.p) || 0};
+      })
+    };
+  }
+
+  function fingerprintData(data, includeNumber){
+    var normalized = {
+      cislo: includeNumber ? String(data.cislo || '') : '',
+      odberatel: String(data.odberatel || ''),
+      castka: Number(data.castka) || 0,
+      datumVystaveni: String(data.datumVystaveni || ''),
+      datumSplatnosti: String(data.datumSplatnosti || ''),
+      polozky: (data.polozky || []).map(function(it){
+        return {d:String(it.d || ''), q:Number(it.q) || 0, p:Number(it.p) || 0};
+      })
+    };
+    var bytes = new TextEncoder().encode(JSON.stringify(normalized));
+    return crypto.subtle.digest('SHA-256', bytes).then(function(buffer){
+      return Array.from(new Uint8Array(buffer)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+    });
   }
 
   /* ---------- číslo faktury (serverová synchronizace) ---------- */
@@ -2758,8 +2871,8 @@ var qrcode = function() {
     });
   }
 
-  function assignNumber(manual){
-    var body = {};
+  function assignNumber(manual, requestId, fingerprint, expected){
+    var body = {requestId:requestId, fingerprint:fingerprint, ocekavane:expected};
     if(manual !== null){ body.rucni = manual; }
     return callFn(API.cislo, 'POST', body).then(function(json){ return json.cislo; });
   }
@@ -2767,18 +2880,8 @@ var qrcode = function() {
     el('f-num').value = String(num);
     updatePreview();
   }
-  function saveHistoryBestEffort(num){
-    var payload = {
-      cislo: String(num),
-      odberatel: el('f-cust').value,
-      castka: getTotal(),
-      datumVystaveni: el('f-iss').value,
-      datumSplatnosti: el('f-due').value,
-      polozky: items.filter(function(it){ return it.d || it.p; })
-    };
-    callFn(API.historie, 'POST', payload).catch(function(){
-      /* faktura je již vytištěná/uložená a číslo přidělené — chybu uložení historie jen tiše ignorujeme */
-    });
+  function saveHistoryStrict(num){
+    return callFn(API.historie, 'POST', stableInvoiceData(num));
   }
 
   /* ---------- položky ---------- */
@@ -2920,6 +3023,7 @@ var qrcode = function() {
   el('f-num').addEventListener('input', function(){
     numTouchedByUser = true;
     assignedInvoiceNumber = null;
+    resetRequestId();
     setNumHint('');
     updatePreview();
   });
@@ -2942,58 +3046,469 @@ var qrcode = function() {
   /* ---------- přidělení čísla + tisk/PDF ---------- */
   function disableActionButtons(disabled){
     el('btn-pdf').disabled = disabled;
+    el('btn-drive').disabled = disabled;
     el('btn-print').disabled = disabled;
+    el('btn-test-download').disabled = disabled;
+    el('btn-test-drive').disabled = disabled;
   }
 
-  function finalizeAndRun(performAction){
-    if(finalizing) return;
-    finalizing = true;
-    disableActionButtons(true);
+  function confirmationText(destination){
+    var number = el('f-num').value.replace(/\D/g,'') || '—';
+    var customer = el('f-cust').value.trim() || '—';
+    var text = 'Kontrola před vystavením\n\n' +
+      'Číslo faktury / variabilní symbol: ' + number + '\n' +
+      'Odběratel: ' + customer + '\n' +
+      'Datum vystavení: ' + fmtDateCZ(el('f-iss').value) + '\n' +
+      'Datum splatnosti: ' + fmtDateCZ(el('f-due').value) + '\n' +
+      'Celkem: ' + fmtMoney(getTotal()) + '\n' +
+      'Cíl: ' + destination;
+    if(destination === 'Google Disk'){
+      text += '\nGoogle účet: ' + (drive.account || 'Nepřipojeno') +
+        '\nSložka: ' + (drive.folderName || 'Není vybrána');
+    }
+    return text + '\n\nPotvrzením fakturu vystavíte. Samotný export neodešle e-mail ani nezmění kalendář.';
+  }
 
+  function finalizeAndRun(destination, performAction){
+    if(finalizing) return;
     var fieldRaw = el('f-num').value.replace(/\D/g,'');
     var fieldNum = fieldRaw ? parseInt(fieldRaw, 10) : null;
-    /* Jakmile už server této faktuře číslo přidělil, další uložení PDF nebo tisk
-       musí použít stejné číslo. Nové číslo se žádá až po založení nové faktury. */
+    if(fieldNum === null){
+      window.alert('Číslo faktury není načtené. Připojte se k internetu, ověřte přístupový token aplikace a zkuste to znovu.');
+      return;
+    }
+    if(!window.confirm(confirmationText(destination))) return;
+
+    finalizing = true;
+    disableActionButtons(true);
     var manualForServer = assignedInvoiceNumber !== null
       ? assignedInvoiceNumber
       : (numTouchedByUser ? fieldNum : null);
+    var expectedForServer = manualForServer === null ? fieldNum : null;
+    var requestId = getRequestId();
+    var draftPayload = stableInvoiceData('');
 
-    assignNumber(manualForServer).then(function(assigned){
+    fingerprintData(draftPayload, false).then(function(draftFingerprint){
+      return assignNumber(manualForServer, requestId, draftFingerprint, expectedForServer);
+    }).then(function(assigned){
       assignedInvoiceNumber = assigned;
       applyAssignedNumber(assigned);
-      performAction();
-      saveHistoryBestEffort(assigned);
-    }).catch(function(){
-      if(fieldNum !== null){
-        var proceed = window.confirm('Číslo faktury nelze ověřit (offline). Pokračovat s číslem ' + fieldNum + ', nebo akci zrušit?');
-        if(proceed){
-          assignedInvoiceNumber = fieldNum;
-          applyAssignedNumber(fieldNum);
-          performAction();
-          saveHistoryBestEffort(fieldNum);
-        }
-      } else {
-        window.alert('Číslo faktury nelze přidělit (jste offline nebo server neodpovídá) a v poli není zadáno žádné ruční číslo.\n\nZadejte prosím číslo ručně, nebo to zkuste znovu s připojením k internetu. Bez čísla nelze fakturu vytisknout ani uložit jako PDF.');
+      var payload = stableInvoiceData(assigned);
+      var pdf;
+      try{
+        pdf = window.__buildPdf();
+      }catch(err){
+        throw new Error('PDF se nepodařilo vytvořit: ' + err.message);
       }
-    }).then(function(){
+      return fingerprintData(payload, true).then(function(fingerprint){
+        return saveHistoryStrict(assigned).then(function(){
+          return performAction({
+            assigned: assigned,
+            payload: payload,
+            fingerprint: fingerprint,
+            pdf: pdf,
+            fileName: 'Faktura_' + assigned + '.pdf'
+          });
+        });
+      });
+    }).catch(function(err){
+      if(err && err.data && err.data.dalsi){
+        assignedInvoiceNumber = null;
+        numTouchedByUser = false;
+        el('f-num').value = String(err.data.dalsi);
+        updatePreview();
+      }
+      window.alert((err && err.message) || 'Vystavení faktury se nepodařilo. Zkuste to znovu.');
+    }).finally(function(){
       finalizing = false;
       disableActionButtons(false);
     });
   }
 
   el('btn-pdf').addEventListener('click', function(){
-    finalizeAndRun(function(){
-      try{
-        var data = window.__ttData();
-        window.__buildPdf().save('Faktura_' + data.num + '.pdf');
-      }catch(err){
-        alert('PDF se nepodařilo vytvořit: ' + err.message);
-      }
+    finalizeAndRun('Stažené v tomto zařízení', function(result){
+      result.pdf.save(result.fileName);
     });
   });
 
   el('btn-print').addEventListener('click', function(){
-    finalizeAndRun(function(){ window.print(); });
+    finalizeAndRun('Tisk', function(){ window.print(); });
+  });
+
+  /* ---------- volitelný export na Google Disk ---------- */
+  function setExportStatus(id, message, kind, link){
+    var box = el(id);
+    box.className = 'export-status' + (kind ? ' ' + kind : '');
+    box.textContent = message || '';
+    if(link){
+      box.appendChild(document.createTextNode(' '));
+      var anchor = document.createElement('a');
+      anchor.href = link;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.textContent = 'Otevřít na Google Disku';
+      box.appendChild(anchor);
+    }
+  }
+
+  function loadScript(src){
+    return new Promise(function(resolve, reject){
+      var existing = document.querySelector('script[data-src="' + src + '"]');
+      if(existing){
+        if(existing.dataset.loaded === '1') resolve();
+        else {
+          existing.addEventListener('load', resolve, {once:true});
+          existing.addEventListener('error', reject, {once:true});
+        }
+        return;
+      }
+      var script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      script.defer = true;
+      script.dataset.src = src;
+      script.addEventListener('load', function(){ script.dataset.loaded = '1'; resolve(); }, {once:true});
+      script.addEventListener('error', function(){ reject(new Error('Knihovnu Google se nepodařilo načíst.')); }, {once:true});
+      document.head.appendChild(script);
+    });
+  }
+
+  function fetchJson(url, options){
+    return fetch(url, options || {}).then(function(response){
+      return response.json().catch(function(){ return {}; }).then(function(json){
+        if(!response.ok){
+          var error = new Error(json.error && json.error.message ? json.error.message : (json.error || ('Chyba služby (' + response.status + ').')));
+          error.status = response.status;
+          error.data = json;
+          throw error;
+        }
+        return json;
+      });
+    });
+  }
+
+  function googleHeaders(){
+    return {Authorization:'Bearer ' + drive.accessToken};
+  }
+
+  function loadGoogleConfig(){
+    if(drive.config) return Promise.resolve(drive.config);
+    return fetchJson(API.googleConfig).then(function(config){
+      if(!config.configured){
+        throw new Error('Google Disk zatím není nakonfigurován. Doplňte tři schválené proměnné prostředí v Netlify.');
+      }
+      if(config.allowedEmail !== ALLOWED_GOOGLE_ACCOUNT){
+        throw new Error('Konfigurace povoleného Google účtu není správná.');
+      }
+      drive.config = config;
+      return config;
+    });
+  }
+
+  function initializeGoogle(){
+    return loadGoogleConfig().then(function(config){
+      return Promise.all([
+        loadScript('https://accounts.google.com/gsi/client'),
+        loadScript('https://apis.google.com/js/api.js')
+      ]).then(function(){
+        return new Promise(function(resolve, reject){
+          if(!window.gapi || !window.google || !google.accounts || !google.accounts.oauth2){
+            reject(new Error('Google knihovny nejsou dostupné.')); return;
+          }
+          gapi.load('picker', {
+            callback: function(){ drive.pickerReady = true; resolve(); },
+            onerror: function(){ reject(new Error('Výběr složky Google Disku se nepodařilo načíst.')); }
+          });
+        });
+      }).then(function(){
+        if(!drive.tokenClient){
+          drive.tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: config.clientId,
+            scope: 'https://www.googleapis.com/auth/drive.file',
+            callback: function(){},
+            error_callback: function(err){
+              if(drive.authReject){
+                var message = err && err.type === 'popup_closed'
+                  ? 'Přihlášení bylo zavřeno před dokončením.'
+                  : 'Přihlašovací okno Google se nepodařilo otevřít.';
+                drive.authReject(new Error(message));
+                drive.authReject = null;
+              }
+            }
+          });
+        }
+      });
+    });
+  }
+
+  function requestGoogleAccess(){
+    return initializeGoogle().then(function(){
+      return new Promise(function(resolve, reject){
+        drive.authReject = reject;
+        drive.tokenClient.callback = function(response){
+          drive.authReject = null;
+          if(response.error){ reject(new Error('Google přístup nebyl udělen: ' + response.error)); return; }
+          drive.accessToken = response.access_token;
+          resolve();
+        };
+        drive.tokenClient.requestAccessToken({prompt:'select_account consent'});
+      });
+    }).then(function(){
+      return fetchJson('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,displayName)', {
+        headers: googleHeaders()
+      });
+    }).then(function(about){
+      var email = about && about.user && about.user.emailAddress;
+      if(email !== ALLOWED_GOOGLE_ACCOUNT){
+        var wrong = email || 'neznámý účet';
+        if(window.google && google.accounts && google.accounts.oauth2 && drive.accessToken){
+          google.accounts.oauth2.revoke(drive.accessToken, function(){});
+        }
+        drive.accessToken = null;
+        drive.account = null;
+        throw new Error('Byl zvolen účet ' + wrong + '. Povolen je pouze účet ' + ALLOWED_GOOGLE_ACCOUNT + '.');
+      }
+      drive.account = email;
+      drive.folderId = null;
+      drive.folderName = null;
+      el('drive-account').textContent = email;
+      el('drive-folder').textContent = 'Není vybrána';
+      el('btn-drive-folder').disabled = false;
+      setExportStatus('drive-status', 'Účet je bezpečně připojen. Nyní vyberte cílovou složku.', 'ok');
+    });
+  }
+
+  function handleExpiredGoogleToken(error){
+    if(error && error.status === 401){
+      drive.accessToken = null;
+      setExportStatus('drive-status', 'Přihlášení ke Google Disku vypršelo. Připojte účet znovu a opakujte uložení.', 'err');
+      throw new Error('Přihlášení ke Google Disku vypršelo. Připojte účet znovu a opakujte uložení.');
+    }
+    throw error;
+  }
+
+  function chooseDriveFolder(){
+    if(!drive.accessToken || !drive.account){
+      setExportStatus('drive-status', 'Nejprve připojte povolený Google účet.', 'err');
+      return;
+    }
+    if(!drive.pickerReady || !drive.config){
+      setExportStatus('drive-status', 'Výběr složky ještě není připraven. Připojte Google Disk znovu.', 'err');
+      return;
+    }
+    var view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+      .setIncludeFolders(true)
+      .setSelectFolderEnabled(true)
+      .setMode(google.picker.DocsViewMode.LIST);
+    var picker = new google.picker.PickerBuilder()
+      .setDeveloperKey(drive.config.apiKey)
+      .setAppId(drive.config.appId)
+      .setOAuthToken(drive.accessToken)
+      .setOrigin(window.location.origin)
+      .setTitle('Vyberte složku pro faktury Tulec Trend Foto')
+      .addView(view)
+      .setCallback(function(data){
+        if(data.action !== google.picker.Action.PICKED) return;
+        var doc = data.docs && data.docs[0];
+        if(!doc || !doc.id) return;
+        fetchJson('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(doc.id) + '?fields=id,name,mimeType,trashed', {
+          headers: googleHeaders()
+        }).then(function(folder){
+          if(folder.trashed || folder.mimeType !== 'application/vnd.google-apps.folder'){
+            throw new Error('Vybraná položka není dostupná složka Google Disku.');
+          }
+          drive.folderId = folder.id;
+          drive.folderName = folder.name;
+          el('drive-folder').textContent = folder.name;
+          setExportStatus('drive-status', 'Před uložením bude zobrazen účet i cílová složka.', 'ok');
+        }).catch(function(error){
+          try{ handleExpiredGoogleToken(error); }catch(finalError){
+            setExportStatus('drive-status', finalError.message, 'err');
+          }
+        });
+      })
+      .build();
+    picker.setVisible(true);
+  }
+
+  function generateDriveFileId(){
+    return fetchJson('https://www.googleapis.com/drive/v3/files/generateIds?count=1&space=drive&type=files', {
+      headers: googleHeaders()
+    }).then(function(result){
+      if(!result.ids || !result.ids[0]) throw new Error('Google Disk nevrátil identifikátor souboru.');
+      return result.ids[0];
+    }).catch(handleExpiredGoogleToken);
+  }
+
+  function getDriveFile(fileId){
+    var fields = 'id,name,webViewLink,parents,appProperties,size,trashed';
+    return fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?fields=' + encodeURIComponent(fields), {
+      headers: googleHeaders()
+    }).then(function(response){
+      if(response.status === 404) return null;
+      return response.json().catch(function(){ return {}; }).then(function(json){
+        if(!response.ok){
+          var error = new Error(json.error && json.error.message ? json.error.message : 'Soubor na Google Disku nelze ověřit.');
+          error.status = response.status;
+          throw error;
+        }
+        return json;
+      });
+    }).catch(handleExpiredGoogleToken);
+  }
+
+  function verifyReservedFile(file, expected){
+    if(!file || file.trashed || !Array.isArray(file.parents) || file.parents.indexOf(drive.folderId) === -1 ||
+       file.name !== expected.fileName || !file.appProperties ||
+       file.appProperties.ttfFingerprint !== expected.fingerprint ||
+       file.appProperties.ttfInvoiceNumber !== String(expected.invoiceNumber) ||
+       file.appProperties.ttfKind !== (expected.test ? 'test' : 'real')){
+      throw new Error('Rezervované místo na Disku obsahuje jiný soubor. Z bezpečnostních důvodů nebude přepsán.');
+    }
+    if(Number(file.size) <= 0) throw new Error('Google Disk nepotvrdil neprázdný PDF soubor.');
+    return file;
+  }
+
+  function createDrivePdf(fileId, pdfBlob, expected){
+    var boundary = 'ttf_' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+    var metadata = {
+      id: fileId,
+      name: expected.fileName,
+      mimeType: 'application/pdf',
+      parents: [drive.folderId],
+      appProperties: {
+        ttfInvoiceNumber: String(expected.invoiceNumber),
+        ttfFingerprint: expected.fingerprint,
+        ttfKind: expected.test ? 'test' : 'real'
+      }
+    };
+    var body = new Blob([
+      '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n',
+      JSON.stringify(metadata),
+      '\r\n--' + boundary + '\r\nContent-Type: application/pdf\r\n\r\n',
+      pdfBlob,
+      '\r\n--' + boundary + '--'
+    ], {type:'multipart/related; boundary=' + boundary});
+    var fields = 'id,name,webViewLink,parents,appProperties,size,trashed';
+    return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=' + encodeURIComponent(fields), {
+      method:'POST',
+      headers:{Authorization:'Bearer ' + drive.accessToken, 'Content-Type':'multipart/related; boundary=' + boundary},
+      body:body
+    }).then(function(response){
+      return response.json().catch(function(){ return {}; }).then(function(json){
+        if(response.status === 409) return getDriveFile(fileId);
+        if(!response.ok){
+          var error = new Error(json.error && json.error.message ? json.error.message : 'Nahrání na Google Disk se nepodařilo.');
+          error.status = response.status;
+          throw error;
+        }
+        return json;
+      });
+    }).catch(handleExpiredGoogleToken);
+  }
+
+  function uploadPdfToDrive(pdf, expected){
+    if(!drive.accessToken || drive.account !== ALLOWED_GOOGLE_ACCOUNT || !drive.folderId){
+      return Promise.reject(new Error('Nejprve připojte účet tulectrendfoto@gmail.com a vyberte cílovou složku.'));
+    }
+    return generateDriveFileId().then(function(candidateId){
+      return callFn(API.driveReservation, 'POST', {
+        account:drive.account,
+        folderId:drive.folderId,
+        candidateId:candidateId,
+        invoiceNumber:String(expected.invoiceNumber),
+        fingerprint:expected.fingerprint,
+        fileName:expected.fileName,
+        test:Boolean(expected.test)
+      });
+    }).then(function(reservation){
+      return getDriveFile(reservation.fileId).then(function(existing){
+        if(existing) return verifyReservedFile(existing, expected);
+        return createDrivePdf(reservation.fileId, pdf.output('blob'), expected).then(function(created){
+          return verifyReservedFile(created, expected);
+        });
+      });
+    });
+  }
+
+  function testPdfData(){
+    return {
+      num:'999001',
+      items:[{d:'Fiktivní testovací fotografická služba', q:1, p:1234}],
+      total:1234,
+      cust:['Testovací zákazník','Ukázková 123','779 00 Vzorové Město'],
+      iss:'01.01.2026',
+      due:'04.01.2026',
+      spd:'',
+      test:true
+    };
+  }
+
+  function testFingerprint(){
+    return fingerprintData({
+      cislo:'999001', odberatel:'Testovací zákazník\nUkázková 123\n779 00 Vzorové Město',
+      castka:1234, datumVystaveni:'2026-01-01', datumSplatnosti:'2026-01-04',
+      polozky:[{d:'Fiktivní testovací fotografická služba',q:1,p:1234}]
+    }, true);
+  }
+
+  el('btn-drive-connect').addEventListener('click', function(){
+    setExportStatus('drive-status', 'Otevírám bezpečné přihlášení Google…', '');
+    requestGoogleAccess().catch(function(error){ setExportStatus('drive-status', error.message, 'err'); });
+  });
+  el('btn-drive-folder').addEventListener('click', chooseDriveFolder);
+
+  el('btn-drive').addEventListener('click', function(){
+    if(!drive.accessToken || !drive.folderId){
+      setExportStatus('drive-status', 'Nejprve připojte účet tulectrendfoto@gmail.com a vyberte cílovou složku.', 'err');
+      return;
+    }
+    finalizeAndRun('Google Disk', function(result){
+      setExportStatus('drive-status', 'Nahrávám potvrzené PDF na Google Disk…', '');
+      return uploadPdfToDrive(result.pdf, {
+        invoiceNumber:result.assigned,
+        fingerprint:result.fingerprint,
+        fileName:result.fileName,
+        test:false
+      }).then(function(file){
+        setExportStatus('drive-status', 'PDF bylo uloženo na Google Disk. Soubor: ' + file.name + '.', 'ok', file.webViewLink);
+      }).catch(function(error){
+        setExportStatus('drive-status', error.message + ' Export můžete bezpečně opakovat bez přidělení nového čísla.', 'err');
+        throw error;
+      });
+    });
+  });
+
+  el('btn-test-download').addEventListener('click', function(){
+    try{
+      window.__buildPdf(testPdfData()).save('TEST_Faktura_999001_NEHRADIT.pdf');
+      setExportStatus('test-status', 'Testovací PDF bylo vytvořeno bez změny číselné řady a historie.', 'ok');
+    }catch(error){
+      setExportStatus('test-status', 'Testovací PDF se nepodařilo vytvořit: ' + error.message, 'err');
+    }
+  });
+
+  el('btn-test-drive').addEventListener('click', function(){
+    if(!drive.accessToken || !drive.folderId){
+      setExportStatus('test-status', 'Nejprve připojte povolený Google účet a vyberte cílovou složku.', 'err');
+      return;
+    }
+    var pdf;
+    try{ pdf = window.__buildPdf(testPdfData()); }
+    catch(error){ setExportStatus('test-status', error.message, 'err'); return; }
+    setExportStatus('test-status', 'Nahrávám testovací PDF na Google Disk…', '');
+    testFingerprint().then(function(fingerprint){
+      return uploadPdfToDrive(pdf, {
+        invoiceNumber:'999001',
+        fingerprint:fingerprint,
+        fileName:'TEST_Faktura_999001_NEHRADIT.pdf',
+        test:true
+      });
+    }).then(function(file){
+      setExportStatus('test-status', 'Testovací PDF bylo uloženo. Číselná řada ani historie se nezměnily.', 'ok', file.webViewLink);
+    }).catch(function(error){
+      setExportStatus('test-status', error.message + ' Testovací export můžete opakovat.', 'err');
+    });
   });
 
   el('btn-mail').addEventListener('click', function(){
@@ -3017,6 +3532,7 @@ var qrcode = function() {
     el('f-num').value = '';
     numTouchedByUser = false;
     assignedInvoiceNumber = null;
+    resetRequestId();
     setNumHint('');
     items = [{d:'Fotoslužby', q:1, p:0}];
     el('f-cust').value = '';
@@ -3083,6 +3599,8 @@ var qrcode = function() {
     el('f-num').value = String(f.cislo || '');
     numTouchedByUser = true; /* konkrétní historické číslo — při tisku se má znovu použít, ne nahradit novým */
     assignedInvoiceNumber = Number(f.cislo) || null;
+    currentRequestId = 'history-' + String(f.cislo || '').replace(/\D/g,'');
+    store.set(DRAFT_KEY, currentRequestId);
     setNumHint('');
     el('f-cust').value = f.odberatel || '';
     if(f.datumVystaveni){ el('f-iss').value = f.datumVystaveni; }
@@ -3111,6 +3629,7 @@ var qrcode = function() {
     markDueBtn(3);
   }
 
+  resetRequestId();
   getToken();
   loadCurrentNumber();
   initDates();
@@ -3510,8 +4029,8 @@ var TT_FONT_SANS='AAEAAAAPAIAAAwBwR0RFRgK7A/gAAFK4AAAAIkdQT1NEdkx1AABS3AAAACBHU1
     return n.toLocaleString('cs-CZ', {minimumFractionDigits:2, maximumFractionDigits:2});
   }
 
-  function buildPdf(){
-    var data = window.__ttData();
+  function buildPdf(dataOverride){
+    var data = dataOverride || window.__ttData();
     var d = new jspdf.jsPDF({unit:'mm', format:'a4'});
 
     d.addFileToVFS('TTSerif.ttf', TT_FONT_SERIF);
@@ -3541,30 +4060,33 @@ var TT_FONT_SANS='AAEAAAAPAIAAAwBwR0RFRgK7A/gAAFK4AAAAIkdQT1NEdkx1AABS3AAAACBHU1
     d.setLineWidth(0.6);
     d.line(M, hy + hh, M + W, hy + hh);
 
-    d.addImage(TT_LOGO, 'PNG', M + 4, hy + 3, 20, 20);
+    if(!data.test) d.addImage(TT_LOGO, 'PNG', M + 4, hy + 3, 20, 20);
 
-    var lx = M + 28;
+    var lx = data.test ? M + 4 : M + 28;
     d.setFont('TTSans','normal'); d.setFontSize(5.6);
-    d.text('ART COLLECTION', lx, hy + 9, {charSpace:1.2});
+    d.text(data.test ? 'FIKTIVNÍ TESTOVACÍ DOKLAD' : 'ART COLLECTION', lx, hy + 9, {charSpace:1.2});
     d.setFont('TTSerif','normal'); d.setFontSize(13);
     d.setTextColor(INK[0],INK[1],INK[2]);
-    d.text('TULEC TREND', lx, hy + 15.4, {charSpace:1});
+    d.text(data.test ? 'TESTOVACÍ DODAVATEL' : 'TULEC TREND', lx, hy + 15.4, {charSpace:1});
     d.setFont('TTSans','normal'); d.setFontSize(5.4);
     d.setTextColor(MUT[0],MUT[1],MUT[2]);
-    d.text('— PHOTOGRAPHY · SINCE 1993 —', lx, hy + 20.4, {charSpace:0.9});
+    d.text(data.test ? '— TEST – NEHRADIT —' : '— PHOTOGRAPHY · SINCE 1993 —', lx, hy + 20.4, {charSpace:0.9});
 
     d.setFont('TTSans','normal'); d.setFontSize(6.6);
     d.setTextColor(GOLD[0],GOLD[1],GOLD[2]);
-    var fT = 'FAKTURA', fW = d.getTextWidth(fT) + 1.4 * (fT.length - 1);
+    var fT = data.test ? 'TESTOVACÍ DOKLAD' : 'FAKTURA', fW = d.getTextWidth(fT) + 1.4 * (fT.length - 1);
     d.text(fT, M + W - 5 - fW, hy + 9.5, {charSpace:1.4});
     d.setFont('TTSerif','bold'); d.setFontSize(16);
     d.text(data.num, M + W - 5, hy + 17.5, {align:'right'});
 
     /* ---------- dodavatel / odběratel ---------- */
     var py = hy + hh + 9;
-    var supplier = ['Tomáš Tulec','Hněvotín 406, 783 47 Hněvotín','Česká republika',
-                    'IČO: 66195284','Nejsme plátci DPH.',
-                    'foto@tulectrend.cz · 603 246 860','www.tulectrendfoto.cz'];
+    var supplier = data.test
+      ? ['Testovací dodavatel','Fiktivní 456, 779 00 Vzorové Město','Česká republika',
+         'IČO: 00000000','Pouze testovací údaje.','test@example.invalid','example.invalid']
+      : ['Tomáš Tulec','Hněvotín 406, 783 47 Hněvotín','Česká republika',
+         'IČO: 66195284','Nejsme plátci DPH.',
+         'foto@tulectrend.cz · 603 246 860','www.tulectrendfoto.cz'];
     var customer = data.cust.length ? data.cust : ['—'];
     var colW = W/2 - 4, cx = M + W/2 + 4;
     var lh = 4.4;
@@ -3606,7 +4128,14 @@ var TT_FONT_SANS='AAEAAAAPAIAAAwBwR0RFRgK7A/gAAFK4AAAAIkdQT1NEdkx1AABS3AAAACBHU1
     d.setDrawColor(LINE[0],LINE[1],LINE[2]); d.setLineWidth(0.2);
     d.rect(M, by, W, bh, 'S');
 
-    var pay = [
+    var pay = data.test ? [
+      ['Účet: ', 'TEST – NEPOUŽÍVAT'],
+      ['IBAN: ', 'FIKTIVNÍ ÚDAJ'],
+      ['SWIFT: ', 'FIKTIVNÍ ÚDAJ'],
+      ['Variabilní symbol: ', data.num],
+      ['Konstantní symbol: ', '—'],
+      ['Způsob platby: ', 'NEHRADIT']
+    ] : [
       ['Účet: ', '226152322/0600'],
       ['IBAN: ', 'CZ75 0600 0000 0002 2615 2322'],
       ['SWIFT: ', 'AGBACZPP'],
@@ -3628,22 +4157,30 @@ var TT_FONT_SANS='AAEAAAAPAIAAAwBwR0RFRgK7A/gAAFK4AAAAIkdQT1NEdkx1AABS3AAAACBHU1
     /* QR kód — vektorově, modul po modulu */
     var qsize = 28, quiet = 4;
     var qx = M + W - 6 - qsize, qy = by + (bh - qsize)/2 - 1;
-    var qr = qrcode(0, 'M');
-    qr.addData(data.spd);
-    qr.make();
-    var n = qr.getModuleCount();
-    var cell = qsize / (n + 2*quiet);
     d.setFillColor(255,255,255);
     d.rect(qx, qy, qsize, qsize, 'F');
-    d.setFillColor(0,0,0);
-    for (var r = 0; r < n; r++){
-      for (var c = 0; c < n; c++){
-        if (qr.isDark(r, c)){
-          d.rect(qx + (c + quiet)*cell, qy + (r + quiet)*cell, cell, cell, 'F');
+    if(data.test){
+      d.setDrawColor(176,74,58); d.setLineWidth(0.6);
+      d.rect(qx, qy, qsize, qsize, 'S');
+      d.setFont('TTSerif','bold'); d.setFontSize(9); d.setTextColor(176,74,58);
+      d.text(['TEST','NEHRADIT'], qx + qsize/2, qy + 12, {align:'center'});
+      label('Bez QR platby', qx + qsize/2, qy + qsize + 3, {align:'center'});
+    }else{
+      var qr = qrcode(0, 'M');
+      qr.addData(data.spd);
+      qr.make();
+      var n = qr.getModuleCount();
+      var cell = qsize / (n + 2*quiet);
+      d.setFillColor(0,0,0);
+      for (var r = 0; r < n; r++){
+        for (var c = 0; c < n; c++){
+          if (qr.isDark(r, c)){
+            d.rect(qx + (c + quiet)*cell, qy + (r + quiet)*cell, cell, cell, 'F');
+          }
         }
       }
+      label('QR Platba+F', qx + qsize/2, qy + qsize + 3, {align:'center'});
     }
-    label('QR Platba+F', qx + qsize/2, qy + qsize + 3, {align:'center'});
 
     var ax = qx - 8;
     label('K úhradě', ax, by + 13, {align:'right'});
@@ -3694,7 +4231,8 @@ var TT_FONT_SANS='AAEAAAAPAIAAAwBwR0RFRgK7A/gAAFK4AAAAIkdQT1NEdkx1AABS3AAAACBHU1
     /* ---------- poznámka + zápatí ---------- */
     d.setFont('TTSerif','normal'); d.setFontSize(8.2);
     d.setTextColor(MUT[0],MUT[1],MUT[2]);
-    d.text('Nejsme plátci DPH. Faktura slouží zároveň jako dodací list.', M, ty + tbH + 8);
+    d.text(data.test ? 'TEST – NEHRADIT. Fiktivní doklad bez účetních a platebních účinků.' :
+      'Nejsme plátci DPH. Faktura slouží zároveň jako dodací list.', M, ty + tbH + 8);
 
     var fy = 297 - M - 9;
     d.setFillColor(LIGHT[0],LIGHT[1],LIGHT[2]);
@@ -3703,8 +4241,13 @@ var TT_FONT_SANS='AAEAAAAPAIAAAwBwR0RFRgK7A/gAAFK4AAAAIkdQT1NEdkx1AABS3AAAACBHU1
     var today = new Date();
     var dd = String(today.getDate()).padStart(2,'0') + '.' +
              String(today.getMonth()+1).padStart(2,'0') + '.' + today.getFullYear();
-    d.text('Vystavil: Tomáš Tulec, ' + dd, M + 4, fy + 5.6);
-    d.text('Tulec Trend Photography — www.tulectrendfoto.cz', M + W - 4, fy + 5.6, {align:'right'});
+    d.text(data.test ? 'Vytvořeno pouze pro technickou zkoušku, ' + dd : 'Vystavil: Tomáš Tulec, ' + dd, M + 4, fy + 5.6);
+    d.text(data.test ? 'TEST – NEHRADIT' : 'Tulec Trend Photography — www.tulectrendfoto.cz', M + W - 4, fy + 5.6, {align:'right'});
+
+    if(data.test){
+      d.setFont('TTSerif','bold'); d.setFontSize(31); d.setTextColor(225,218,210);
+      d.text('TEST – NEHRADIT', PW/2, 188, {align:'center', angle:45});
+    }
 
     return d;
   }
