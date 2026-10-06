@@ -257,6 +257,7 @@
     <div class="actions">
       <button type="button" class="gold" id="btn-pdf">Uložit PDF (do Stažených)</button>
       <button type="button" id="btn-drive">Uložit PDF na Google Disk</button>
+      <div class="export-status" id="drive-action-status" role="status" aria-live="polite" hidden></div>
       <button type="button" id="btn-print">Vytisknout</button>
       <button type="button" id="btn-mail">Otevřít e-mail zákazníkovi</button>
       <button type="button" class="ghost" id="btn-next">Nová faktura (číslo +1)</button>
@@ -3150,18 +3151,23 @@ var qrcode = function() {
 
   /* ---------- volitelný export na Google Disk ---------- */
   function setExportStatus(id, message, kind, link){
-    var box = el(id);
-    box.className = 'export-status' + (kind ? ' ' + kind : '');
-    box.textContent = message || '';
-    if(link){
-      box.appendChild(document.createTextNode(' '));
-      var anchor = document.createElement('a');
-      anchor.href = link;
-      anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
-      anchor.textContent = 'Otevřít na Google Disku';
-      box.appendChild(anchor);
-    }
+    // Hlášení o skutečném exportu zobrazujeme také přímo pod jeho tlačítkem.
+    var boxes = [el(id)];
+    if(id === 'drive-status') boxes.push(el('drive-action-status'));
+    boxes.forEach(function(box){
+      box.hidden = !message;
+      box.className = 'export-status' + (kind ? ' ' + kind : '');
+      box.textContent = message || '';
+      if(link){
+        box.appendChild(document.createTextNode(' '));
+        var anchor = document.createElement('a');
+        anchor.href = link;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.textContent = 'Otevřít na Google Disku';
+        box.appendChild(anchor);
+      }
+    });
   }
 
   function loadScript(src){
