@@ -7,8 +7,9 @@ Statická fakturační aplikace s tiskem, PDF, QR platbou, serverovou historií 
 - Živý formulář před opravou zobrazoval `999003`, zatímco nejvyšší skutečně uložená faktura v historii byla `260124`. Stav byl ověřen v produkční aplikaci bez vystavení faktury.
 - Místní serverová funkce nyní určuje další číslo z historie, platných přidělení a skutečného čítače. Testovací čítač řady `999xxx` ignoruje; navazující číslo je `260125` a po přidělení následují `260126`, `260127`.
 - Ruční přidělení čísla z testovací řady `999xxx` je v místní úpravě odmítnuto. Samostatný testovací export `999001` zůstává oddělený.
-- Dne 6. 10. 2026 prošlo všech 12 místních testů včetně simulace zjištěného stavu `999003` a historie `260124`. Změna dosud nebyla nasazena; živý formulář tedy zatím opravu nepotvrzuje.
-- Další krok: po schválení nasazení ověřit v živém formuláři `260125`, bez vystavení skutečné faktury.
+- Dne 6. 10. 2026 prošlo všech 12 místních testů včetně simulace zjištěného stavu `999003` a historie `260124`. Oprava byla nasazena z větve `main` v commitu `6497400`.
+- Nově načtený živý formulář dne 6. 10. 2026 zobrazil `260125` v poli čísla faktury i v náhledu. Žádná skutečná faktura při kontrole nebyla vystavena.
+- Další krok: běžně vystavit první fakturu po kontrole údajů; číslo `260126` se živě ověří až po jejím skutečném přidělení.
 
 ## Spuštění a nasazení
 
