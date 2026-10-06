@@ -11,6 +11,13 @@ Statická fakturační aplikace s tiskem, PDF, QR platbou, serverovou historií 
 - Nově načtený živý formulář dne 6. 10. 2026 zobrazil `260125` v poli čísla faktury i v náhledu. Žádná skutečná faktura při kontrole nebyla vystavena.
 - Další krok: běžně vystavit první fakturu po kontrole údajů; číslo `260126` se živě ověří až po jejím skutečném přidělení.
 
+## Kontrola Google Disku k 6. 10. 2026
+
+- V živém formuláři tlačítko „Uložit PDF na Google Disk“ bez připojeného účtu zobrazilo výzvu k připojení a výběru složky. Po připojení povoleného účtu a výběru existující složky otevřelo správný potvrzovací souhrn. Ten byl zrušen; skutečná faktura nebyla vystavena a další číslo zůstalo `260125`.
+- Bezpečný testovací export na Disk neprošel: rezervovaný soubor `TEST_Faktura_999001_NEHRADIT.pdf` se nachází od 5. 10. 2026 v koši firemního Disku, zatímco cílová složka je prázdná. Aplikace odmítla použít rezervaci pro soubor mimo cílovou složku. Žádný soubor nebyl obnoven ani nově nahrán.
+- Uživatel potvrdil, že testovací PDF vložil do koše záměrně; soubor se neobnovuje. Testovací export není součástí běžné číselné řady. Uložení skutečné faktury na Disk nebylo při této kontrole provedeno; pro ověření této poslední části je nutné pracovat s konkrétní skutečnou fakturou a jejím potvrzením.
+- Schválená úprava v commitu `561f186` zobrazuje hlášení Google Disku také přímo pod tlačítkem pro uložení skutečné faktury. Dne 6. 10. 2026 prošlo 12 místních testů a kontrola syntaxe pěti skriptů. Na živé stránce bylo po kliknutí bez připojeného Disku vizuálně ověřeno upozornění přímo pod tlačítkem; číslo zůstalo `260125`.
+
 ## Spuštění a nasazení
 
 Hlavní soubor je `index.html`. Produkce: https://fakturace-tulec-trend-foto.netlify.app . Netlify nasazuje větev `main` repozitáře https://github.com/tomas-tulec/fakturace . Funkce jsou v `netlify/functions`; vyžadují Netlify Blobs a proměnnou `FAKTURA_TOKEN`. Hodnota tokenu nepatří do repozitáře.
