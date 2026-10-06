@@ -72,58 +72,88 @@ function reset(next) {
 const fingerprintA = 'a'.repeat(64);
 const fingerprintB = 'b'.repeat(64);
 
-test('prázdné úložiště bezpečně začíná číslem 260124', async () => {
+test('prázdné úložiště bezpečně začíná číslem 260125', async () => {
   reset();
   const response = await counter.handler(event('GET'));
   assert.equal(response.statusCode, 200);
-  assert.equal(json(response).dalsi, 260124);
+  assert.equal(json(response).dalsi, 260125);
 });
 
-test('starý číselný stav se načte s dalším číslem 260124', async () => {
+test('starý číselný stav 260124 naváže číslem 260125', async () => {
   reset(260124);
   const response = await counter.handler(event('GET'));
   assert.equal(response.statusCode, 200);
-  assert.equal(json(response).dalsi, 260124);
+  assert.equal(json(response).dalsi, 260125);
 });
 
 test('opakování stejného vystavení zachová číslo a čítač zvýší jen jednou', async () => {
-  reset(260124);
-  const body = { requestId: 'invoice-opakovani-1', fingerprint: fingerprintA, ocekavane: 260124 };
+  reset(260125);
+  const body = { requestId: 'invoice-opakovani-1', fingerprint: fingerprintA, ocekavane: 260125 };
   const first = await counter.handler(event('POST', body));
   const second = await counter.handler(event('POST', body));
-  assert.equal(json(first).cislo, 260124);
-  assert.equal(json(second).cislo, 260124);
-  assert.equal(memory.get('citac').data.next, 260125);
+  assert.equal(json(first).cislo, 260125);
+  assert.equal(json(second).cislo, 260125);
+  assert.equal(memory.get('citac').data.next, 260126);
   assert.equal(memory.get('citac').data.assignments.length, 1);
 });
 
 test('stejný identifikátor vystavení s jiným obsahem je odmítnut', async () => {
-  reset(260124);
-  await counter.handler(event('POST', { requestId: 'invoice-nemenna-1', fingerprint: fingerprintA, ocekavane: 260124 }));
-  const changed = await counter.handler(event('POST', { requestId: 'invoice-nemenna-1', fingerprint: fingerprintB, ocekavane: 260125 }));
+  reset(260125);
+  await counter.handler(event('POST', { requestId: 'invoice-nemenna-1', fingerprint: fingerprintA, ocekavane: 260125 }));
+  const changed = await counter.handler(event('POST', { requestId: 'invoice-nemenna-1', fingerprint: fingerprintB, ocekavane: 260126 }));
   assert.equal(changed.statusCode, 409);
   assert.match(json(changed).error, /nelze změnit/);
-  assert.equal(memory.get('citac').data.next, 260125);
+  assert.equal(memory.get('citac').data.next, 260126);
 });
 
 test('dva souběžné požadavky dostanou různá čísla', async () => {
-  reset(260124);
+  reset(260125);
   const [one, two] = await Promise.all([
-    counter.handler(event('POST', { requestId: 'invoice-soubeh-0001', fingerprint: fingerprintA, ocekavane: 260124 })),
-    counter.handler(event('POST', { requestId: 'invoice-soubeh-0002', fingerprint: fingerprintB, ocekavane: 260124 })),
+    counter.handler(event('POST', { requestId: 'invoice-soubeh-0001', fingerprint: fingerprintA, ocekavane: 260125 })),
+    counter.handler(event('POST', { requestId: 'invoice-soubeh-0002', fingerprint: fingerprintB, ocekavane: 260125 })),
   ]);
   const responses = [one, two];
   const successful = responses.filter((response) => response.statusCode === 200).map((response) => json(response).cislo);
   const stale = responses.filter((response) => response.statusCode === 409);
-  assert.deepEqual(successful, [260124]);
+  assert.deepEqual(successful, [260125]);
   assert.equal(stale.length, 1);
-  assert.equal(json(stale[0]).dalsi, 260125);
+  assert.equal(json(stale[0]).dalsi, 260126);
 
   const retry = await counter.handler(event('POST', {
-    requestId: 'invoice-soubeh-0002', fingerprint: fingerprintB, ocekavane: 260125,
+    requestId: 'invoice-soubeh-0002', fingerprint: fingerprintB, ocekavane: 260126,
   }));
-  assert.equal(json(retry).cislo, 260125);
-  assert.equal(memory.get('citac').data.next, 260126);
+  assert.equal(json(retry).cislo, 260126);
+  assert.equal(memory.get('citac').data.next, 260127);
+});
+
+test('chybný testovací čítač se opraví podle poslední skutečné faktury', async () => {
+  reset({ version: 2, next: 999003, assignments: [
+    { id: 'test-999002', number: 999002, fingerprint: fingerprintA },
+  ] });
+  memory.set('historie', { data: [{ cislo: '260124' }], etag: 'etag-h' });
+  const shown = await counter.handler(event('GET'));
+  assert.equal(json(shown).dalsi, 260125);
+
+  const first = await counter.handler(event('POST', {
+    requestId: 'invoice-skutecna-1', fingerprint: fingerprintA, ocekavane: 260125,
+  }));
+  assert.equal(json(first).cislo, 260125);
+  assert.equal(json(await counter.handler(event('GET'))).dalsi, 260126);
+
+  const second = await counter.handler(event('POST', {
+    requestId: 'invoice-skutecna-2', fingerprint: fingerprintB, ocekavane: 260126,
+  }));
+  assert.equal(json(second).cislo, 260126);
+  assert.equal(json(await counter.handler(event('GET'))).dalsi, 260127);
+});
+
+test('testovací číslo nelze ručně přidělit skutečné faktuře', async () => {
+  reset(260125);
+  const response = await counter.handler(event('POST', {
+    requestId: 'invoice-test-999', fingerprint: fingerprintA, rucni: 999003,
+  }));
+  assert.equal(response.statusCode, 400);
+  assert.equal(memory.get('citac').data, 260125);
 });
 
 test('historie je idempotentní a nepovolí změnu stejného čísla', async () => {

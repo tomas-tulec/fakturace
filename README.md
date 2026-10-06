@@ -2,6 +2,14 @@
 
 Statická fakturační aplikace s tiskem, PDF, QR platbou, serverovou historií posledních 10 faktur a volitelným přímým uložením PDF na Google Disk.
 
+## Místní oprava číselné řady k 6. 10. 2026
+
+- Živý formulář před opravou zobrazoval `999003`, zatímco nejvyšší skutečně uložená faktura v historii byla `260124`. Stav byl ověřen v produkční aplikaci bez vystavení faktury.
+- Místní serverová funkce nyní určuje další číslo z historie, platných přidělení a skutečného čítače. Testovací čítač řady `999xxx` ignoruje; navazující číslo je `260125` a po přidělení následují `260126`, `260127`.
+- Ruční přidělení čísla z testovací řady `999xxx` je v místní úpravě odmítnuto. Samostatný testovací export `999001` zůstává oddělený.
+- Dne 6. 10. 2026 prošlo všech 12 místních testů včetně simulace zjištěného stavu `999003` a historie `260124`. Změna dosud nebyla nasazena; živý formulář tedy zatím opravu nepotvrzuje.
+- Další krok: po schválení nasazení ověřit v živém formuláři `260125`, bez vystavení skutečné faktury.
+
 ## Spuštění a nasazení
 
 Hlavní soubor je `index.html`. Produkce: https://fakturace-tulec-trend-foto.netlify.app . Netlify nasazuje větev `main` repozitáře https://github.com/tomas-tulec/fakturace . Funkce jsou v `netlify/functions`; vyžadují Netlify Blobs a proměnnou `FAKTURA_TOKEN`. Hodnota tokenu nepatří do repozitáře.

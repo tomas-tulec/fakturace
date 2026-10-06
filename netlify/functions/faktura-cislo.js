@@ -2,8 +2,9 @@
 // Verze 2 ukládá čítač a idempotentní přidělení v jediném podmíněném zápisu.
 const { getStore, connectLambda } = require('@netlify/blobs');
 
-const INIT_VALUE = 260124;
+const INIT_VALUE = 260125;
 const KEY = 'citac';
+const HISTORY_KEY = 'historie';
 const MAX_RETRIES = 8;
 const MAX_ASSIGNMENTS = 500;
 
@@ -41,6 +42,31 @@ function normalizeState(raw) {
   return { version: 2, next: INIT_VALUE, assignments: [] };
 }
 
+// Skutečná šestimístná čísla zachováme; řadu 999xxx používá jen testovací doklad.
+function isRealInvoiceNumber(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 260000 && number < 999000;
+}
+
+// Historie a záznamy přidělení chrání návaznost i při chybném testovacím čítači.
+async function nextRealNumber(store, state) {
+  const history = await store.get(HISTORY_KEY, { type: 'json' });
+  let next = INIT_VALUE;
+  if (isRealInvoiceNumber(state.next)) next = Math.max(next, state.next);
+  const invoices = Array.isArray(history) ? history : [];
+  for (const invoice of invoices) {
+    if (invoice && isRealInvoiceNumber(invoice.cislo)) {
+      next = Math.max(next, Number(invoice.cislo) + 1);
+    }
+  }
+  for (const assignment of state.assignments) {
+    if (assignment && isRealInvoiceNumber(assignment.number)) {
+      next = Math.max(next, Number(assignment.number) + 1);
+    }
+  }
+  return next;
+}
+
 async function readState(store) {
   const res = await store.getWithMetadata(KEY, { type: 'json' });
   if (!res || res.data === null || res.data === undefined) {
@@ -75,7 +101,8 @@ exports.handler = async function (event) {
 
     if (event.httpMethod === 'GET') {
       const { state } = await readState(store);
-      return { statusCode: 200, headers, body: JSON.stringify({ dalsi: state.next }) };
+      const next = await nextRealNumber(store, state);
+      return { statusCode: 200, headers, body: JSON.stringify({ dalsi: next }) };
     }
 
     if (event.httpMethod === 'POST') {
@@ -90,6 +117,10 @@ exports.handler = async function (event) {
       if (body.rucni !== undefined && body.rucni !== null && body.rucni !== '') {
         const parsed = Number(body.rucni);
         if (Number.isFinite(parsed)) manual = Math.trunc(parsed);
+      }
+
+      if (manual !== null && /^999\d{3}$/.test(String(manual))) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Testovací číslo nelze použít pro skutečnou fakturu.' }) };
       }
 
       if (!validRequestId(requestId) || !validFingerprint(fingerprint)) {
@@ -110,19 +141,20 @@ exports.handler = async function (event) {
           return { statusCode: 200, headers, body: JSON.stringify({ cislo: existing.number, opakovani: true }) };
         }
 
-        if (manual === null && expected !== null && expected !== state.next) {
+        const current = await nextRealNumber(store, state);
+        if (manual === null && expected !== null && expected !== current) {
           return {
             statusCode: 409,
             headers,
             body: JSON.stringify({
               error: 'Číslo faktury se mezitím změnilo. Načtěte aktuální číslo a zkontrolujte souhrn znovu.',
-              dalsi: state.next,
+              dalsi: current,
             }),
           };
         }
 
-        const assigned = manual === null ? state.next : manual;
-        const next = manual === null ? state.next + 1 : (manual >= state.next ? manual + 1 : state.next);
+        const assigned = manual === null ? current : manual;
+        const next = manual === null ? current + 1 : (manual >= current ? manual + 1 : current);
         const updated = {
           version: 2,
           next,
@@ -150,4 +182,4 @@ exports.handler = async function (event) {
 };
 
 // Export čistých funkcí usnadňuje lokální regresní testy bez přístupu k produkčním datům.
-exports._test = { normalizeState, validRequestId, validFingerprint };
+exports._test = { normalizeState, isRealInvoiceNumber, validRequestId, validFingerprint };
