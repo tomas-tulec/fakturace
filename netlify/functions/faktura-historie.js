@@ -45,7 +45,7 @@ function invoiceFingerprint(invoice) {
 }
 
 async function legacyInvoices(store) {
-  const data = await store.get('historie', { type: 'json', consistency: 'strong' });
+  const data = await store.get('historie', { type: 'json' });
   return Array.isArray(data) ? data : [];
 }
 
@@ -60,7 +60,7 @@ async function listInvoices(store, year) {
   }
   const { blobs } = await store.list({ prefix: PREFIX });
   const savedInvoices = await Promise.all(blobs.map((blob) =>
-    store.get(blob.key, { type: 'json', consistency: 'strong' })
+    store.get(blob.key, { type: 'json' })
   ));
   for (const invoice of savedInvoices) {
     if (invoice && invoice.cislo) invoices.set(String(invoice.cislo), invoice);
@@ -109,7 +109,7 @@ exports.handler = async function (event) {
     }
 
     for (let attempt = 0; attempt < RETRIES; attempt++) {
-      const saved = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
+      const saved = await store.getWithMetadata(key, { type: 'json' });
       const current = saved && saved.data ? saved.data : await legacyInvoice(store, number);
       const options = saved && saved.etag ? { onlyIfMatch: saved.etag } : { onlyIfNew: true };
 

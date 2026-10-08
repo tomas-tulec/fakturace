@@ -52,7 +52,7 @@ exports.handler = async function (event) {
     const store = getStore('faktury');
     const key = reservationKey(body);
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      const existing = await store.getWithMetadata(KEY, { type: 'json', consistency: 'strong' });
+      const existing = await store.getWithMetadata(KEY, { type: 'json' });
       const map = existing && existing.data && typeof existing.data === 'object' ? Object.assign({}, existing.data) : {};
       const saved = map[key];
       if (saved) {

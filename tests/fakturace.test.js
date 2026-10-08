@@ -18,11 +18,13 @@ const fakeStore = {
     const prefix = (options && options.prefix) || '';
     return { blobs: Array.from(memory.keys()).filter((key) => key.startsWith(prefix)).map((key) => ({ key })) };
   },
-  async getWithMetadata(key) {
+  async getWithMetadata(key, options) {
+    assert.notEqual(options && options.consistency, 'strong', 'Produkční Lambda nemá uncachedEdgeURL');
     const item = memory.get(key);
     return item ? { data: clone(item.data), etag: item.etag } : { data: null, etag: undefined };
   },
-  async get(key) {
+  async get(key, options) {
+    assert.notEqual(options && options.consistency, 'strong', 'Produkční Lambda nemá uncachedEdgeURL');
     const item = memory.get(key);
     return item ? clone(item.data) : null;
   },
