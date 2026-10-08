@@ -14,6 +14,10 @@ function clone(value) {
 }
 
 const fakeStore = {
+  async list(options) {
+    const prefix = (options && options.prefix) || '';
+    return { blobs: Array.from(memory.keys()).filter((key) => key.startsWith(prefix)).map((key) => ({ key })) };
+  },
   async getWithMetadata(key) {
     const item = memory.get(key);
     return item ? { data: clone(item.data), etag: item.etag } : { data: null, etag: undefined };
@@ -147,6 +151,13 @@ test('chybný testovací čítač se opraví podle poslední skutečné faktury'
   assert.equal(json(await counter.handler(event('GET'))).dalsi, 260127);
 });
 
+test('další číslo respektuje samostatné záznamy i po ztrátě starých přidělení', async () => {
+  reset({ version: 2, next: 260125, assignments: [] });
+  memory.set('faktura/260301', { data: { cislo: '260301' }, etag: 'etag-invoice' });
+  const response = await counter.handler(event('GET'));
+  assert.equal(json(response).dalsi, 260302);
+});
+
 test('testovací číslo nelze ručně přidělit skutečné faktuře', async () => {
   reset(260125);
   const response = await counter.handler(event('POST', {
@@ -156,7 +167,7 @@ test('testovací číslo nelze ručně přidělit skutečné faktuře', async ()
   assert.equal(memory.get('citac').data, 260125);
 });
 
-test('historie je idempotentní a nepovolí změnu stejného čísla', async () => {
+test('historie opraví jen otevřenou fakturu, zachová číslo a odmítne novou duplicitu', async () => {
   reset(260124);
   const invoice = {
     cislo: '260124', odberatel: 'Fiktivní odběratel', castka: 1000,
@@ -169,8 +180,77 @@ test('historie je idempotentní a nepovolí změnu stejného čísla', async () 
   assert.equal(first.statusCode, 200);
   assert.equal(json(repeated).unchanged, true);
   assert.equal(changed.statusCode, 409);
-  assert.equal(memory.get('historie').data.length, 1);
-  assert.equal(memory.get('historie').data[0].castka, 1000);
+  const originalFingerprint = json(first).faktura.fingerprint;
+  const corrected = await history.handler(event('POST', Object.assign({}, invoice, {
+    castka: 2000, puvodniOtisk: originalFingerprint, opravil: 'Tomáš Tulec',
+  })));
+  assert.equal(corrected.statusCode, 200);
+  assert.equal(json(corrected).faktura.cislo, '260124');
+  assert.equal(json(corrected).faktura.castka, 2000);
+  assert.equal(json(corrected).faktura.opravy[0].pred.castka, 1000);
+  assert.equal(json(corrected).faktura.opravy[0].opravil, 'Tomáš Tulec');
+  assert.equal(memory.get('citac').data, 260124);
+  const stale = await history.handler(event('POST', Object.assign({}, invoice, {
+    castka: 3000, puvodniOtisk: originalFingerprint, opravil: 'Tomáš Tulec',
+  })));
+  assert.equal(stale.statusCode, 409);
+  const listed = await history.handler(event('GET'));
+  assert.equal(json(listed).faktury.length, 1);
+  assert.equal(json(listed).faktury[0].castka, 2000);
+});
+
+test('historie uchová více než deset faktur v aktuálním roce', async () => {
+  reset(260125);
+  for (let i = 0; i < 12; i++) {
+    const response = await history.handler(event('POST', {
+      cislo: String(260125 + i), odberatel: 'Fiktivní odběratel', castka: i + 1,
+      datumVystaveni: '2026-10-08', datumSplatnosti: '2026-10-11', polozky: [],
+    }));
+    assert.equal(response.statusCode, 200);
+  }
+  const listed = await history.handler(event('GET'));
+  assert.equal(json(listed).faktury.length, 12);
+  assert.equal(json(listed).faktury[0].cislo, '260136');
+  const otherYear = await history.handler(Object.assign(event('GET'), {
+    queryStringParameters: { rok: '2027' },
+  }));
+  assert.equal(json(otherYear).faktury.length, 0);
+});
+
+test('starý záznam zůstane dostupný a oprava ho v roční historii nahradí', async () => {
+  reset(260125);
+  const legacy = {
+    cislo: '260124', odberatel: 'Původní odběratel', castka: 1000,
+    datumVystaveni: '2026-10-07', datumSplatnosti: '2026-10-10', polozky: [],
+  };
+  memory.set('historie', { data: [legacy], etag: 'etag-legacy' });
+  const before = await history.handler(event('GET'));
+  assert.equal(json(before).faktury[0].odberatel, 'Původní odběratel');
+  const update = await history.handler(event('POST', Object.assign({}, legacy, {
+    odberatel: 'Opravený odběratel',
+    puvodniOtisk: history._test.invoiceFingerprint(legacy),
+    opravil: 'Tomáš Tulec',
+  })));
+  assert.equal(update.statusCode, 200);
+  const after = await history.handler(event('GET'));
+  assert.equal(json(after).faktury.length, 1);
+  assert.equal(json(after).faktury[0].odberatel, 'Opravený odběratel');
+  assert.equal(memory.get('historie').data[0].odberatel, 'Původní odběratel');
+});
+
+test('odstraněný záznam se ze staré historie znovu neobjeví', async () => {
+  reset(260125);
+  const legacy = {
+    cislo: '260124', odberatel: 'Fiktivní odběratel', castka: 1000,
+    datumVystaveni: '2026-10-07', datumSplatnosti: '2026-10-10', polozky: [],
+  };
+  memory.set('historie', { data: [legacy], etag: 'etag-legacy' });
+  const removed = await history.handler(event('DELETE', { cislo: '260124' }));
+  assert.equal(json(removed).deleted, true);
+  const listed = await history.handler(event('GET'));
+  assert.equal(json(listed).faktury.length, 0);
+  const reused = await history.handler(event('POST', legacy));
+  assert.equal(reused.statusCode, 409);
 });
 
 test('test 999001 se neukládá do historie a nemění čítač', async () => {
@@ -197,6 +277,30 @@ test('opakovaný export na Disk vrátí stejné file ID a jiný obsah odmítne',
   assert.equal(json(first).fileId, 'file_123456789012');
   assert.equal(json(repeated).fileId, 'file_123456789012');
   assert.equal(changed.statusCode, 409);
+});
+
+test('opravený export na Disk ponechá původní file ID a vyžaduje předchozí otisk', async () => {
+  reset(260124);
+  const body = {
+    account: 'tulectrendfoto@gmail.com', folderId: 'folder_1234567890',
+    candidateId: 'file_123456789012', invoiceNumber: '260124',
+    fingerprint: fingerprintA, fileName: 'Faktura_260124.pdf', test: false,
+  };
+  await reservation.handler(event('POST', body));
+  const corrected = await reservation.handler(event('POST', Object.assign({}, body, {
+    candidateId: 'file_999999999999', fingerprint: fingerprintB,
+    previousFingerprint: fingerprintA,
+  })));
+  assert.equal(corrected.statusCode, 200);
+  assert.equal(json(corrected).fileId, body.candidateId);
+  assert.equal(json(corrected).previousFingerprint, fingerprintA);
+  const repeated = await reservation.handler(event('POST', Object.assign({}, body, {
+    fingerprint: fingerprintB,
+  })));
+  assert.equal(json(repeated).fileId, body.candidateId);
+  assert.equal(json(repeated).previousFingerprint, fingerprintA);
+  const stale = await reservation.handler(event('POST', body));
+  assert.equal(stale.statusCode, 409);
 });
 
 test('veřejná Google konfigurace neobsahuje interní fakturační token', async () => {

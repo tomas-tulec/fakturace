@@ -22,6 +22,7 @@ function validBody(body) {
     /^[A-Za-z0-9_-]{10,200}$/.test(String(body.candidateId || '')) &&
     /^\d{1,20}$/.test(String(body.invoiceNumber || '')) &&
     /^[a-f0-9]{64}$/.test(String(body.fingerprint || '')) &&
+    (!body.previousFingerprint || /^[a-f0-9]{64}$/.test(String(body.previousFingerprint))) &&
     typeof body.fileName === 'string' && body.fileName.length >= 5 && body.fileName.length <= 180;
 }
 
@@ -51,18 +52,32 @@ exports.handler = async function (event) {
     const store = getStore('faktury');
     const key = reservationKey(body);
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      const existing = await store.getWithMetadata(KEY, { type: 'json' });
+      const existing = await store.getWithMetadata(KEY, { type: 'json', consistency: 'strong' });
       const map = existing && existing.data && typeof existing.data === 'object' ? Object.assign({}, existing.data) : {};
       const saved = map[key];
       if (saved) {
-        if (saved.fingerprint !== body.fingerprint || saved.fileName !== body.fileName) {
+        if (saved.fileName !== body.fileName ||
+            (saved.fingerprint !== body.fingerprint &&
+             (body.test || saved.fingerprint !== body.previousFingerprint))) {
           return {
             statusCode: 409,
             headers,
-            body: JSON.stringify({ error: 'Pro tuto fakturu již existuje rezervace s jiným obsahem. Uložený soubor nebude přepsán.' }),
+            body: JSON.stringify({ error: 'Rezervace souboru neodpovídá aktuální podobě faktury.' }),
           };
         }
-        return { statusCode: 200, headers, body: JSON.stringify({ fileId: saved.fileId, opakovani: true }) };
+        if (saved.fingerprint === body.fingerprint) {
+          return { statusCode: 200, headers, body: JSON.stringify({ fileId: saved.fileId, opakovani: true, previousFingerprint: saved.previousFingerprint || null }) };
+        }
+        map[key] = Object.assign({}, saved, {
+          previousFingerprint: saved.fingerprint,
+          fingerprint: body.fingerprint,
+          updatedAt: new Date().toISOString(),
+        });
+        const changed = await store.setJSON(KEY, map, { onlyIfMatch: existing.etag });
+        if (changed.modified) {
+          return { statusCode: 200, headers, body: JSON.stringify({ fileId: saved.fileId, opakovani: false, previousFingerprint: saved.fingerprint }) };
+        }
+        continue;
       }
 
       map[key] = {

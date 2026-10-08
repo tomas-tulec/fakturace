@@ -5,6 +5,7 @@ const { getStore, connectLambda } = require('@netlify/blobs');
 const INIT_VALUE = 260125;
 const KEY = 'citac';
 const HISTORY_KEY = 'historie';
+const INVOICE_PREFIX = 'faktura/';
 const MAX_RETRIES = 8;
 const MAX_ASSIGNMENTS = 500;
 
@@ -63,6 +64,12 @@ async function nextRealNumber(store, state) {
     if (assignment && isRealInvoiceNumber(assignment.number)) {
       next = Math.max(next, Number(assignment.number) + 1);
     }
+  }
+  // Samostatné záznamy drží použitá čísla i po omezení seznamu přidělení.
+  const { blobs } = await store.list({ prefix: INVOICE_PREFIX });
+  for (const blob of blobs) {
+    const number = blob.key.slice(INVOICE_PREFIX.length);
+    if (isRealInvoiceNumber(number)) next = Math.max(next, Number(number) + 1);
   }
   return next;
 }

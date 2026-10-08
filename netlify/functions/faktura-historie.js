@@ -1,13 +1,11 @@
-// Historie posledních 10 skutečných faktur (Netlify Blobs, store "faktury", klíč "historie").
-// Stejné číslo lze zapsat opakovaně pouze s totožným obsahem.
+// Každá faktura má vlastní záznam. Starý seznam deseti faktur zůstává čitelný.
 const crypto = require('node:crypto');
 const { getStore, connectLambda } = require('@netlify/blobs');
 
-const KEY = 'historie';
-const MAX_ITEMS = 10;
-const MAX_RETRIES = 8;
+const PREFIX = 'faktura/';
+const RETRIES = 8;
 
-function corsHeaders(event) {
+function headersFor(event) {
   const origin = (event.headers && (event.headers.origin || event.headers.Origin)) || '';
   const allowed = [process.env.URL, process.env.DEPLOY_PRIME_URL, process.env.DEPLOY_URL].filter(Boolean);
   const headers = {
@@ -16,7 +14,7 @@ function corsHeaders(event) {
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Cache-Control': 'no-store',
   };
-  if (allowed.indexOf(origin) !== -1) headers['Access-Control-Allow-Origin'] = origin;
+  if (allowed.includes(origin)) headers['Access-Control-Allow-Origin'] = origin;
   return headers;
 }
 
@@ -28,126 +26,134 @@ function checkToken(event) {
 
 function sanitizeInvoice(raw) {
   raw = raw || {};
-  const items = Array.isArray(raw.polozky)
-    ? raw.polozky.slice(0, 50).map((p) => ({
-        d: String((p && p.d) || '').slice(0, 200),
-        q: Number(p && p.q) || 0,
-        p: Number(p && p.p) || 0,
-      }))
-    : [];
   return {
     cislo: String(raw.cislo || '').replace(/\D/g, ''),
     odberatel: String(raw.odberatel || '').slice(0, 2000),
     castka: Number(raw.castka) || 0,
     datumVystaveni: String(raw.datumVystaveni || ''),
     datumSplatnosti: String(raw.datumSplatnosti || ''),
-    polozky: items,
+    polozky: Array.isArray(raw.polozky) ? raw.polozky.slice(0, 50).map((p) => ({
+      d: String((p && p.d) || '').slice(0, 200),
+      q: Number(p && p.q) || 0,
+      p: Number(p && p.p) || 0,
+    })) : [],
   };
 }
 
-function canonicalInvoice(invoice) {
-  const clean = sanitizeInvoice(invoice);
-  return JSON.stringify({
-    cislo: clean.cislo,
-    odberatel: clean.odberatel,
-    castka: clean.castka,
-    datumVystaveni: clean.datumVystaveni,
-    datumSplatnosti: clean.datumSplatnosti,
-    polozky: clean.polozky,
-  });
+function invoiceFingerprint(invoice) {
+  return crypto.createHash('sha256').update(JSON.stringify(sanitizeInvoice(invoice)), 'utf8').digest('hex');
 }
 
-function invoiceFingerprint(invoice) {
-  return crypto.createHash('sha256').update(canonicalInvoice(invoice), 'utf8').digest('hex');
+async function legacyInvoices(store) {
+  const data = await store.get('historie', { type: 'json', consistency: 'strong' });
+  return Array.isArray(data) ? data : [];
+}
+
+async function legacyInvoice(store, number) {
+  return (await legacyInvoices(store)).find((f) => f && String(f.cislo) === number) || null;
+}
+
+async function listInvoices(store, year) {
+  const invoices = new Map();
+  for (const invoice of await legacyInvoices(store)) {
+    if (invoice && invoice.cislo) invoices.set(String(invoice.cislo), invoice);
+  }
+  const { blobs } = await store.list({ prefix: PREFIX });
+  const savedInvoices = await Promise.all(blobs.map((blob) =>
+    store.get(blob.key, { type: 'json', consistency: 'strong' })
+  ));
+  for (const invoice of savedInvoices) {
+    if (invoice && invoice.cislo) invoices.set(String(invoice.cislo), invoice);
+  }
+  return Array.from(invoices.values())
+    .filter((invoice) => !invoice.deleted && String(invoice.datumVystaveni || '').slice(0, 4) === year)
+    .sort((a, b) => Number(b.cislo) - Number(a.cislo));
+}
+
+function reply(statusCode, headers, data) {
+  return { statusCode, headers, body: JSON.stringify(data) };
 }
 
 exports.handler = async function (event) {
   connectLambda(event);
-  const headers = corsHeaders(event);
-
+  const headers = headersFor(event);
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' };
-  if (!checkToken(event)) {
-    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Neplatný nebo chybějící token.' }) };
-  }
+  if (!checkToken(event)) return reply(401, headers, { error: 'Neplatný nebo chybějící token.' });
 
   try {
     const store = getStore('faktury');
-
-    if (event.httpMethod === 'DELETE') {
-      let body;
-      try { body = JSON.parse(event.body || '{}'); } catch (e) {
-        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Neplatný požadavek.' }) };
-      }
-      const number = String((body && body.cislo) || '');
-      if (!/^\d{1,20}$/.test(number)) {
-        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Neplatné číslo faktury.' }) };
-      }
-      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        const existing = await store.getWithMetadata(KEY, { type: 'json' });
-        const list = Array.isArray(existing && existing.data) ? existing.data : [];
-        const remaining = list.filter((f) => String(f && f.cislo) !== number);
-        if (remaining.length === list.length) {
-          return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: false, faktury: list }) };
-        }
-        const result = await store.setJSON(KEY, remaining, { onlyIfMatch: existing.etag });
-        if (result.modified) {
-          return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: true, faktury: remaining }) };
-        }
-      }
-      return { statusCode: 409, headers, body: JSON.stringify({ error: 'Historie se mezitím změnila. Opakujte akci.' }) };
-    }
-
+    const year = (event.queryStringParameters && event.queryStringParameters.rok) || String(new Date().getFullYear());
+    if (!/^20\d{2}$/.test(year)) return reply(400, headers, { error: 'Neplatný rok historie.' });
     if (event.httpMethod === 'GET') {
-      const data = await store.get(KEY, { type: 'json' });
-      const list = Array.isArray(data) ? data.slice(0, MAX_ITEMS) : [];
-      return { statusCode: 200, headers, body: JSON.stringify({ faktury: list }) };
+      return reply(200, headers, { faktury: await listInvoices(store, year), rok: year });
+    }
+    if (event.httpMethod !== 'POST' && event.httpMethod !== 'DELETE') {
+      return reply(405, headers, { error: 'Metoda není podporována.' });
+    }
+    let body;
+    try { body = JSON.parse(event.body || '{}'); } catch (e) { body = null; }
+    const number = String((body && body.cislo) || '');
+    if (!/^\d{1,20}$/.test(number) || /^999\d{3}$/.test(number)) {
+      return reply(400, headers, { error: 'Neplatné číslo skutečné faktury.' });
+    }
+    const key = PREFIX + number;
+    const invoice = event.httpMethod === 'POST' ? sanitizeInvoice(body) : null;
+    if (invoice && !/^20\d{2}-\d{2}-\d{2}$/.test(invoice.datumVystaveni)) {
+      return reply(400, headers, { error: 'Vyplňte platné datum vystavení faktury.' });
+    }
+    const fingerprint = invoice ? invoiceFingerprint(invoice) : null;
+    const expected = String((body && body.puvodniOtisk) || '');
+    const author = String((body && body.opravil) || '').trim().slice(0, 120);
+    if (expected && !/^[a-f0-9]{64}$/.test(expected)) {
+      return reply(400, headers, { error: 'Neplatná identita opravované faktury.' });
     }
 
-    if (event.httpMethod === 'POST') {
-      let body = {};
-      try { body = event.body ? JSON.parse(event.body) : {}; } catch (e) { body = {}; }
-      const invoice = sanitizeInvoice(body);
-      if (!invoice.cislo) {
-        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Chybí číslo faktury.' }) };
-      }
-      if (invoice.cislo === '999001') {
-        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Testovací doklad 999001 se do historie skutečných faktur neukládá.' }) };
-      }
+    for (let attempt = 0; attempt < RETRIES; attempt++) {
+      const saved = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
+      const current = saved && saved.data ? saved.data : await legacyInvoice(store, number);
+      const options = saved && saved.etag ? { onlyIfMatch: saved.etag } : { onlyIfNew: true };
 
-      const fingerprint = invoiceFingerprint(invoice);
-      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        const existing = await store.getWithMetadata(KEY, { type: 'json' });
-        const list = Array.isArray(existing && existing.data) ? existing.data.slice() : [];
-        const etag = existing && existing.etag;
-        const idx = list.findIndex((f) => f && String(f.cislo) === invoice.cislo);
-
-        if (idx !== -1) {
-          if (invoiceFingerprint(list[idx]) !== fingerprint) {
-            return {
-              statusCode: 409,
-              headers,
-              body: JSON.stringify({ error: 'Faktura č. ' + invoice.cislo + ' již existuje s jiným obsahem. Operace byla zastavena.' }),
-            };
-          }
-          return { statusCode: 200, headers, body: JSON.stringify({ ok: true, unchanged: true, faktury: list.slice(0, MAX_ITEMS) }) };
+      if (event.httpMethod === 'DELETE') {
+        if (!current || current.deleted) {
+          return reply(200, headers, { ok: true, deleted: false, faktury: await listInvoices(store, year) });
         }
-
-        list.unshift(Object.assign({}, invoice, { fingerprint }));
-        const trimmed = list.slice(0, MAX_ITEMS);
-        const options = etag ? { onlyIfMatch: etag } : { onlyIfNew: true };
-        const result = await store.setJSON(KEY, trimmed, options);
+        const tombstone = { cislo: number, datumVystaveni: current.datumVystaveni, deleted: true };
+        const result = await store.setJSON(key, tombstone, options);
         if (result.modified) {
-          return { statusCode: 200, headers, body: JSON.stringify({ ok: true, unchanged: false, faktury: trimmed }) };
+          return reply(200, headers, { ok: true, deleted: true, faktury: await listInvoices(store, year) });
         }
+        continue;
       }
 
-      return { statusCode: 409, headers, body: JSON.stringify({ error: 'Historii se nepodařilo bezpečně uložit kvůli souběžné změně. Zkuste to znovu.' }) };
+      if (current && current.deleted) {
+        return reply(409, headers, { error: 'Toto číslo již bylo použito a z historie odstraněno.' });
+      }
+      if (current && invoiceFingerprint(current) === fingerprint) {
+        return reply(200, headers, { ok: true, unchanged: true, faktura: current });
+      }
+      if (current && (!expected || expected !== invoiceFingerprint(current))) {
+        return reply(409, headers, { error: 'Faktura č. ' + number + ' již existuje nebo se mezitím změnila.' });
+      }
+      if (!current && expected) {
+        return reply(409, headers, { error: 'Opravovaná faktura již v historii není.' });
+      }
+      if (current && !author) {
+        return reply(400, headers, { error: 'Uveďte osobu, která opravu provedla.' });
+      }
+      const changes = current && Array.isArray(current.opravy) ? current.opravy.slice() : [];
+      if (current) {
+        changes.push({ pred: sanitizeInvoice(current), po: invoice, opravil: author, kdy: new Date().toISOString() });
+      }
+      const updated = Object.assign({}, invoice, { fingerprint, opravy: changes });
+      const result = await store.setJSON(key, updated, options);
+      if (result.modified) {
+        return reply(200, headers, { ok: true, unchanged: false, corrected: Boolean(current), faktura: updated });
+      }
     }
-
-    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Metoda není podporována.' }) };
+    return reply(409, headers, { error: 'Historie se mezitím změnila. Opakujte akci.' });
   } catch (err) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'Chyba serveru.', detail: String((err && err.message) || err) }) };
+    return reply(500, headers, { error: 'Chyba serveru.', detail: String((err && err.message) || err) });
   }
 };
 
-exports._test = { sanitizeInvoice, canonicalInvoice, invoiceFingerprint };
+exports._test = { sanitizeInvoice, invoiceFingerprint };

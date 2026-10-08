@@ -1,6 +1,15 @@
 # Fakturace — Tulec Trend Foto
 
-Statická fakturační aplikace s tiskem, PDF, QR platbou, serverovou historií posledních 10 faktur a volitelným přímým uložením PDF na Google Disk.
+Statická fakturační aplikace s tiskem, PDF, QR platbou, serverovou historií faktur za aktuální rok a volitelným přímým uložením PDF na Google Disk.
+
+## Místní úprava oprav faktur a roční historie k 8. 10. 2026
+
+- Otevřenou fakturu lze opravit a znovu uložit jako PDF, vytisknout nebo exportovat na Google Disk pod původním číslem. Nová faktura se stejným číslem zůstává odmítnuta. Oprava ukládá jméno osoby, čas a změněné údaje; v běžné historii se zobrazuje jen aktuální podoba.
+- Nově vystavené faktury se ukládají jednotlivě, bez limitu posledních deseti záznamů. Historie zobrazuje faktury s datem vystavení v aktuálním roce. Nejvýše deset starších záznamů, které jsou dosud ve starém úložišti, zůstává dostupných; dříve vytlačené záznamy změna neobnoví.
+- Opravený export na Google Disk používá stejné ID souboru a aktualizuje jeho obsah. Starší místní stažená PDF aplikace nemaže. Skutečný export opravené faktury na Disk dosud nebyl ověřen.
+- Čítač při určení dalšího čísla zohledňuje i nové jednotlivé záznamy, aby řada zůstala zachována po omezení starého seznamu přidělení.
+- Dne 8. 10. 2026 prošlo 17 místních testů na fiktivních údajích, kontrola syntaxe pěti vložených skriptů a tří upravených serverových funkcí. Test skutečné faktury ani produkčního Google Disku se neprováděl.
+- Úprava vznikla v oddělené pracovní kopii `C:\Users\tulec\Documents\Codex\2026-10-08\referenced-chatgpt-conversation-this-is-an\work\fakturace-edit`. Nasazení do produkce zbývá po samostatném schválení a ověření.
 
 ## Místní oprava číselné řady k 6. 10. 2026
 

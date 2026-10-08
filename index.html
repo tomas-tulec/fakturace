@@ -295,7 +295,7 @@
       </div>
       <div class="export-status" id="test-status" aria-live="polite"></div>
     </section>
-    <button type="button" class="history-link" id="btn-history">Historie posledních faktur</button>
+    <button type="button" class="history-link" id="btn-history">Historie faktur za aktuální rok</button>
   </div>
 
   <!-- ============ NÁHLED FAKTURY ============ -->
@@ -394,7 +394,7 @@ www.tulectrendfoto.cz</div>
 <div class="hist-overlay" id="hist-overlay" hidden>
   <div class="hist-panel">
     <div class="hist-head">
-      <span>Historie posledních faktur</span>
+      <span>Historie faktur za aktuální rok</span>
       <button type="button" id="hist-close" aria-label="Zavřít historii">✕</button>
     </div>
     <div class="hist-body" id="hist-body">
@@ -2712,6 +2712,8 @@ var qrcode = function() {
   var finalizing = false;
   var numTouchedByUser = false;
   var assignedInvoiceNumber = null;
+  var editingInvoiceNumber = null;
+  var editingInvoiceFingerprint = null;
   var currentRequestId = null;
   var NUM_EMPTY = '—';
   var API = {
@@ -2767,7 +2769,8 @@ var qrcode = function() {
 
     var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     if(controller){ opts.signal = controller.signal; }
-    var timer = controller ? setTimeout(function(){ controller.abort(); }, 8000) : null;
+    var timeoutMs = method === 'GET' && url.indexOf(API.historie) === 0 ? 20000 : 8000;
+    var timer = controller ? setTimeout(function(){ controller.abort(); }, timeoutMs) : null;
 
     return fetch(url, opts).then(function(resp){
       if(timer) clearTimeout(timer);
@@ -2894,8 +2897,13 @@ var qrcode = function() {
     el('f-num').value = String(num);
     updatePreview();
   }
-  function saveHistoryStrict(num){
-    return callFn(API.historie, 'POST', stableInvoiceData(num));
+  function saveHistoryStrict(num, originalFingerprint, author){
+    var data = stableInvoiceData(num);
+    if(originalFingerprint){
+      data.puvodniOtisk = originalFingerprint;
+      data.opravil = author || '';
+    }
+    return callFn(API.historie, 'POST', data);
   }
 
   /* ---------- položky ---------- */
@@ -3036,8 +3044,10 @@ var qrcode = function() {
 
   el('f-num').addEventListener('input', function(){
     numTouchedByUser = true;
-    assignedInvoiceNumber = null;
-    resetRequestId();
+    if(editingInvoiceNumber === null){
+      assignedInvoiceNumber = null;
+      resetRequestId();
+    }
     setNumHint('');
     updatePreview();
   });
@@ -3062,6 +3072,8 @@ var qrcode = function() {
     el('btn-pdf').disabled = disabled;
     el('btn-drive').disabled = disabled;
     el('btn-print').disabled = disabled;
+    el('btn-next').disabled = disabled;
+    el('btn-history').disabled = disabled;
     el('btn-test-download').disabled = disabled;
     el('btn-test-drive').disabled = disabled;
   }
@@ -3069,7 +3081,7 @@ var qrcode = function() {
   function confirmationText(destination){
     var number = el('f-num').value.replace(/\D/g,'') || '—';
     var customer = el('f-cust').value.trim() || '—';
-    var text = 'Kontrola před vystavením\n\n' +
+    var text = (editingInvoiceNumber !== null ? 'Kontrola před opravou' : 'Kontrola před vystavením') + '\n\n' +
       'Číslo faktury / variabilní symbol: ' + number + '\n' +
       'Odběratel: ' + customer + '\n' +
       'Datum vystavení: ' + fmtDateCZ(el('f-iss').value) + '\n' +
@@ -3080,7 +3092,9 @@ var qrcode = function() {
       text += '\nGoogle účet: ' + (drive.account || 'Nepřipojeno') +
         '\nSložka: ' + (drive.folderName || 'Není vybrána');
     }
-    return text + '\n\nPotvrzením fakturu vystavíte. Samotný export neodešle e-mail ani nezmění kalendář.';
+    return text + (editingInvoiceNumber !== null
+      ? '\n\nPřípadná oprava nahradí aktuální podobu této faktury v historii. Poté proběhne export nebo tisk.'
+      : '\n\nPotvrzením fakturu vystavíte. Samotný export neodešle e-mail ani nezmění kalendář.');
   }
 
   function finalizeAndRun(destination, performAction){
@@ -3091,6 +3105,14 @@ var qrcode = function() {
       window.alert('Číslo faktury není načtené. Připojte se k internetu, ověřte přístupový token aplikace a zkuste to znovu.');
       return;
     }
+    if(!el('f-iss').value || !el('f-due').value){
+      window.alert('Vyplňte datum vystavení a datum splatnosti.');
+      return;
+    }
+    if(editingInvoiceNumber !== null && fieldNum !== editingInvoiceNumber){
+      window.alert('Při opravě musí zůstat původní číslo faktury. Pro novou fakturu použijte tlačítko „Nová faktura“.');
+      return;
+    }
     if(!window.confirm(confirmationText(destination))) return;
 
     finalizing = true;
@@ -3099,12 +3121,13 @@ var qrcode = function() {
       ? assignedInvoiceNumber
       : (numTouchedByUser ? fieldNum : null);
     var expectedForServer = manualForServer === null ? fieldNum : null;
-    var requestId = getRequestId();
-    var draftPayload = stableInvoiceData('');
+    var assignment = editingInvoiceNumber !== null
+      ? Promise.resolve(editingInvoiceNumber)
+      : fingerprintData(stableInvoiceData(''), false).then(function(draftFingerprint){
+        return assignNumber(manualForServer, getRequestId(), draftFingerprint, expectedForServer);
+      });
 
-    fingerprintData(draftPayload, false).then(function(draftFingerprint){
-      return assignNumber(manualForServer, requestId, draftFingerprint, expectedForServer);
-    }).then(function(assigned){
+    assignment.then(function(assigned){
       assignedInvoiceNumber = assigned;
       applyAssignedNumber(assigned);
       var payload = stableInvoiceData(assigned);
@@ -3115,17 +3138,32 @@ var qrcode = function() {
         throw new Error('PDF se nepodařilo vytvořit: ' + err.message);
       }
       return fingerprintData(payload, true).then(function(fingerprint){
-        return saveHistoryStrict(assigned).then(function(){
+        var previousFingerprint = editingInvoiceFingerprint;
+        var changed = previousFingerprint && previousFingerprint !== fingerprint;
+        var author = '';
+        if(changed){
+          author = window.prompt('Kdo provedl opravu faktury? Uveďte jméno pro záznam o opravě:', 'Tomáš Tulec');
+          if(!author || !author.trim()){
+            var cancelled = new Error('Oprava byla zrušena.');
+            cancelled.cancelled = true;
+            throw cancelled;
+          }
+        }
+        return saveHistoryStrict(assigned, changed ? previousFingerprint : null, author).then(function(saved){
+          editingInvoiceNumber = assigned;
+          editingInvoiceFingerprint = saved.faktura.fingerprint;
           return performAction({
             assigned: assigned,
             payload: payload,
             fingerprint: fingerprint,
             pdf: pdf,
-            fileName: 'Faktura_' + assigned + '.pdf'
+            fileName: 'Faktura_' + assigned + '.pdf',
+            previousFingerprint: changed ? previousFingerprint : null
           });
         });
       });
     }).catch(function(err){
+      if(err && err.cancelled) return;
       if(err && err.data && err.data.dalsi){
         assignedInvoiceNumber = null;
         numTouchedByUser = false;
@@ -3455,19 +3493,21 @@ var qrcode = function() {
     return file;
   }
 
-  function createDrivePdf(fileId, pdfBlob, expected){
+  function writeDrivePdf(fileId, pdfBlob, expected, update){
     var boundary = 'ttf_' + Date.now().toString(36) + Math.random().toString(36).slice(2);
     var metadata = {
-      id: fileId,
       name: expected.fileName,
       mimeType: 'application/pdf',
-      parents: [drive.folderId],
       appProperties: {
         ttfInvoiceNumber: String(expected.invoiceNumber),
         ttfFingerprint: expected.fingerprint,
         ttfKind: expected.test ? 'test' : 'real'
       }
     };
+    if(!update){
+      metadata.id = fileId;
+      metadata.parents = [drive.folderId];
+    }
     var body = new Blob([
       '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n',
       JSON.stringify(metadata),
@@ -3476,13 +3516,16 @@ var qrcode = function() {
       '\r\n--' + boundary + '--'
     ], {type:'multipart/related; boundary=' + boundary});
     var fields = 'id,name,webViewLink,parents,appProperties,size,trashed';
-    return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=' + encodeURIComponent(fields), {
-      method:'POST',
+    var endpoint = 'https://www.googleapis.com/upload/drive/v3/files' +
+      (update ? '/' + encodeURIComponent(fileId) : '') +
+      '?uploadType=multipart&fields=' + encodeURIComponent(fields);
+    return fetch(endpoint, {
+      method:update ? 'PATCH' : 'POST',
       headers:{Authorization:'Bearer ' + drive.accessToken, 'Content-Type':'multipart/related; boundary=' + boundary},
       body:body
     }).then(function(response){
       return response.json().catch(function(){ return {}; }).then(function(json){
-        if(response.status === 409) return getDriveFile(fileId);
+        if(response.status === 409 && !update) return getDriveFile(fileId);
         if(!response.ok){
           var error = new Error(json.error && json.error.message ? json.error.message : 'Nahrání na Google Disk se nepodařilo.');
           error.status = response.status;
@@ -3504,13 +3547,29 @@ var qrcode = function() {
         candidateId:candidateId,
         invoiceNumber:String(expected.invoiceNumber),
         fingerprint:expected.fingerprint,
+        previousFingerprint:expected.previousFingerprint || null,
         fileName:expected.fileName,
         test:Boolean(expected.test)
       });
     }).then(function(reservation){
       return getDriveFile(reservation.fileId).then(function(existing){
-        if(existing) return verifyReservedFile(existing, expected);
-        return createDrivePdf(reservation.fileId, pdf.output('blob'), expected).then(function(created){
+        if(existing){
+          if(existing.appProperties && existing.appProperties.ttfFingerprint === expected.fingerprint){
+            return verifyReservedFile(existing, expected);
+          }
+          if(!reservation.previousFingerprint || !existing.appProperties ||
+             existing.appProperties.ttfFingerprint !== reservation.previousFingerprint ||
+             existing.trashed || !Array.isArray(existing.parents) ||
+             existing.parents.indexOf(drive.folderId) === -1 ||
+             existing.appProperties.ttfInvoiceNumber !== String(expected.invoiceNumber) ||
+             existing.appProperties.ttfKind !== 'real'){
+            throw new Error('Původní soubor na Disku neodpovídá opravované faktuře. Nebude přepsán.');
+          }
+          return writeDrivePdf(reservation.fileId, pdf.output('blob'), expected, true).then(function(updated){
+            return verifyReservedFile(updated, expected);
+          });
+        }
+        return writeDrivePdf(reservation.fileId, pdf.output('blob'), expected, false).then(function(created){
           return verifyReservedFile(created, expected);
         });
       });
@@ -3558,6 +3617,7 @@ var qrcode = function() {
         invoiceNumber:result.assigned,
         fingerprint:result.fingerprint,
         fileName:result.fileName,
+        previousFingerprint:result.previousFingerprint,
         test:false
       }).then(function(file){
         setExportStatus('drive-status', 'PDF bylo uloženo na Google Disk. Soubor: ' + file.name + '.', 'ok', file.webViewLink);
@@ -3621,6 +3681,8 @@ var qrcode = function() {
     el('f-num').value = '';
     numTouchedByUser = false;
     assignedInvoiceNumber = null;
+    editingInvoiceNumber = null;
+    editingInvoiceFingerprint = null;
     resetRequestId();
     setNumHint('');
     items = [{d:'Fotoslužby', q:1, p:0}];
@@ -3636,7 +3698,7 @@ var qrcode = function() {
     el('hist-overlay').hidden = false;
     var body = el('hist-body');
     body.innerHTML = '<div class="hist-empty">Načítám…</div>';
-    callFn(API.historie, 'GET').then(function(json){
+    callFn(API.historie + '?rok=' + new Date().getFullYear(), 'GET').then(function(json){
       renderHistoryList(json.faktury || []);
     }).catch(function(){
       body.innerHTML = '<div class="hist-empty">Historii se nepodařilo načíst (offline nebo chyba serveru).</div>';
@@ -3673,7 +3735,7 @@ var qrcode = function() {
         if(remove.disabled) return;
         if(!window.confirm('Opravdu chcete smazat fakturu č. ' + f.cislo + ' z historie? Tuto akci nelze vrátit.')) return;
         remove.disabled = true;
-        callFn(API.historie, 'DELETE', {cislo: String(f.cislo)}).then(function(json){
+        callFn(API.historie + '?rok=' + new Date().getFullYear(), 'DELETE', {cislo: String(f.cislo)}).then(function(json){
           renderHistoryList(json.faktury || []);
         }).catch(function(){
           remove.disabled = false;
@@ -3688,6 +3750,8 @@ var qrcode = function() {
     el('f-num').value = String(f.cislo || '');
     numTouchedByUser = true; /* konkrétní historické číslo — při tisku se má znovu použít, ne nahradit novým */
     assignedInvoiceNumber = Number(f.cislo) || null;
+    editingInvoiceNumber = assignedInvoiceNumber;
+    editingInvoiceFingerprint = f.fingerprint || null;
     currentRequestId = 'history-' + String(f.cislo || '').replace(/\D/g,'');
     store.set(DRAFT_KEY, currentRequestId);
     setNumHint('');
