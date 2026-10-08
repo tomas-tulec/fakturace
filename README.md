@@ -9,7 +9,9 @@ Statická fakturační aplikace s tiskem, PDF, QR platbou, serverovou historií 
 - Opravený export na Google Disk používá stejné ID souboru a aktualizuje jeho obsah. Starší místní stažená PDF aplikace nemaže. Skutečný export opravené faktury na Disk dosud nebyl ověřen.
 - Čítač při určení dalšího čísla zohledňuje i nové jednotlivé záznamy, aby řada zůstala zachována po omezení starého seznamu přidělení.
 - Dne 8. 10. 2026 prošlo 17 místních testů na fiktivních údajích, kontrola syntaxe pěti vložených skriptů a tří upravených serverových funkcí. Test skutečné faktury ani produkčního Google Disku se neprováděl.
-- Úprava vznikla v oddělené pracovní kopii `C:\Users\tulec\Documents\Codex\2026-10-08\referenced-chatgpt-conversation-this-is-an\work\fakturace-edit` a commitem `64b7c5f` byla 8. 10. 2026 přenesena do hlavní místní složky na větev `main`. Nasazení do produkce zbývá po samostatném schválení a ověření.
+- Úprava vznikla v oddělené pracovní kopii `C:\Users\tulec\Documents\Codex\2026-10-08\referenced-chatgpt-conversation-this-is-an\work\fakturace-edit` a commitem `64b7c5f` byla 8. 10. 2026 přenesena do hlavní místní složky na větev `main`.
+- Po samostatném schválení byla větev `main` 8. 10. 2026 odeslána na GitHub. Veřejně načtený úvodní soubor aplikace odpověděl HTTP 200 a obsahoval nový nadpis roční historie i text potvrzení opravy; předchozí nadpis už neobsahoval. To potvrzuje zveřejnění klientské části, nikoli funkční vyzkoušení opravy skutečného dokladu nebo jeho nahrání na Google Disk.
+- Další krok: po kontrole konkrétní faktury uživatelem provést opravu v aplikaci a ověřit její uložení, tisk a případný export na Disk. Číslo skutečné faktury ani číselná řada nebyly v rámci této úpravy produkčně měněny.
 
 ## Místní oprava číselné řady k 6. 10. 2026
 
