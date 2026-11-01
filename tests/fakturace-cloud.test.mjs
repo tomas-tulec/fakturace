@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { createHandler, ORIGIN, RESOURCE, CLIENT, CALLBACK, SCOPE } from '../netlify/functions/fakturace-cloud.mjs';
+import { createHandler, readLiveNumber, ORIGIN, RESOURCE, CLIENT, CALLBACK, SCOPE } from '../netlify/functions/fakturace-cloud.mjs';
 const SECRET='FICTIONAL_TEST_KEY_NOT_A_REAL_CREDENTIAL';
 const verifier='x'.repeat(64);
 const sha=value=>crypto.createHash('sha256').update(value).digest('base64url');
+test('number read uses only the existing Lambda route with redirects forbidden',async()=>{
+  assert.equal(await readLiveNumber(SECRET,async(url,options)=>{assert.equal(url,ORIGIN+'/.netlify/functions/faktura-cislo');assert.equal(options.headers['x-faktura-token'],SECRET);assert.equal(options.method,'GET');assert.equal(options.redirect,'error');return Response.json({dalsi:260555});}),260555);
+  for(const value of [999003,260555.5,'260555',null]) await assert.rejects(()=>readLiveNumber(SECRET,async()=>Response.json({dalsi:value})));
+  await assert.rejects(()=>readLiveNumber(SECRET,async()=>new Response('',{status:403})));
+});
 function memoryStore() {
   const items=new Map(); let serial=0;
   return { items, async getWithMetadata(key){const item=items.get(key);return item?structuredClone(item):null;},async setJSON(key,data,options={}){const item=items.get(key);if((options.onlyIfNew&&item)||(options.onlyIfMatch&&item?.etag!==options.onlyIfMatch))return {modified:false}; const etag=String(++serial);items.set(key,{data:structuredClone(data),etag});return {modified:true,etag};} };
@@ -36,8 +41,9 @@ test('discovery advertises exact issuer, resource, scope, PKCE and public predef
   const r=await f.request('/api/ttf-mcp');assert.equal(r.status,401);assert.match(r.headers.get('www-authenticate'),/resource_metadata=/);assert.equal(f.reads(),0);
 });
 test('valid consent, PKCE exchange and authenticated gateway never expose owner key',async()=>{
-  const f=fixture(), {code,c}=await f.grant();assert.doesNotMatch(c.html,new RegExp(SECRET));assert.match(c.page.headers.get('set-cookie'),/Secure; HttpOnly; SameSite=Lax/);assert.match(c.page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  const f=fixture(), {code,c}=await f.grant();assert.doesNotMatch(c.html,new RegExp(SECRET));assert.match(c.page.headers.get('set-cookie'),/Secure; HttpOnly; SameSite=Lax/);assert.match(c.page.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.equal(c.page.headers.get('referrer-policy'),'strict-origin');
   const response=await f.exchange(code);assert.equal(response.status,200);const tokens=await response.json();assert.equal(tokens.expires_in,600);assert.equal(tokens.scope,SCOPE);assert.equal((await f.mcp(tokens.access_token)).status,200);assert.equal(f.reads(),1);
+  assert.ok(c.page.headers.get('content-security-policy').includes("form-action 'self' "+CALLBACK+';'));
   assert.equal((await f.exchange(code)).status,400);
 });
 test('unapproved clients, redirects, scopes, audiences and plain PKCE cannot get login form',async()=>{
@@ -48,9 +54,21 @@ test('consent is bound to same-origin POST, browser cookie and one-use nonce',as
   const f=fixture(),c=await f.consent();
   assert.equal((await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:SECRET},{origin:ORIGIN})).status,403);
   assert.equal((await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:SECRET},{origin:'https://evil.example',cookie:c.cookie})).status,403);
+  assert.equal((await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:SECRET},{origin:'null',cookie:c.cookie})).status,403);
   assert.equal((await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:'wrong'},{origin:ORIGIN,cookie:c.cookie})).status,403);
   assert.equal((await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:SECRET},{origin:ORIGIN,cookie:c.cookie})).status,303);
   assert.equal((await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:SECRET},{origin:ORIGIN,cookie:c.cookie})).status,400);
+});
+test('parallel login windows keep separate cookies and cannot overwrite one another',async()=>{
+  const f=fixture(),a=await f.consent(),b=await f.consent();assert.notEqual(a.cookie.split('=')[0],b.cookie.split('=')[0]);
+  const cookies=a.cookie+'; '+b.cookie;
+  for(const c of [a,b])assert.equal((await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:SECRET},{origin:ORIGIN,cookie:cookies})).status,303);
+});
+test('login errors distinguish missing cookies, expiry and wrong key without exposing credentials',async()=>{
+  const f=fixture(),c=await f.consent();
+  const missing=await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:SECRET},{origin:ORIGIN});assert.match(await missing.text(),/login_cookie_mismatch/);
+  const wrong=await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:'FICTIONAL_WRONG_KEY'},{origin:ORIGIN,cookie:c.cookie});const html=await wrong.text();assert.match(html,/access_denied/);assert.doesNotMatch(html,/FICTIONAL_WRONG_KEY/);
+  f.advance(601);const expired=await f.formPost('/api/ttf-oauth/authorize',{request:c.form,owner_key:SECRET},{origin:ORIGIN,cookie:c.cookie});assert.match(await expired.text(),/expired_login_form/);
 });
 test('wrong PKCE cannot redeem code and concurrent redemption succeeds once',async()=>{
   const f=fixture(),{code}=await f.grant();const bad=await f.formPost('/api/ttf-oauth/token',{client_id:CLIENT,resource:RESOURCE,grant_type:'authorization_code',code,redirect_uri:CALLBACK,code_verifier:'z'.repeat(64)});assert.equal(bad.status,400);
