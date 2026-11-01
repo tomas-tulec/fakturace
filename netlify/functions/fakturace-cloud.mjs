@@ -19,6 +19,7 @@ const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<'
 const base = { 'Cache-Control':'no-store', 'Pragma':'no-cache', 'X-Content-Type-Options':'nosniff', 'Referrer-Policy':'no-referrer', 'X-Frame-Options':'DENY', 'Content-Security-Policy':"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" };
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { ...base, 'Content-Type':'application/json; charset=utf-8', ...headers } });
 const failure = (error, status = 400) => json({error}, status);
+const loginError = (error,message,status=400) => new Response(`<!doctype html><html lang="cs"><meta charset="utf-8"><title>Přihlášení fakturace</title><h1>Přihlášení nebylo dokončeno</h1><p>${escape(message)}</p><p>Kód chyby: ${escape(error)}</p><p>Vraťte se do připojení aplikace v ChatGPT a otevřete nové přihlášení. Klíč neposílejte do chatu.</p></html>`,{status,headers:{...base,'Content-Type':'text/html; charset=utf-8'}});
 const challenge = () => json({ error:'authorization_required' }, 401, {'WWW-Authenticate':`Bearer resource_metadata="${META}", scope="${SCOPE}"`});
 async function getStore() { const { getStore } = await import('@netlify/blobs'); return getStore({name:'ttf-oauth-sessions-v1', consistency:'strong'}); }
 export async function readLiveNumber(secret, fetcher = fetch) {
@@ -107,24 +108,26 @@ export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || ''
         const html=`<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Připojení fakturace Tulec Trend</title><h1>Připojit fakturaci k ChatGPT</h1><p>Povolíte kontrolu dalšího čísla a přípravu neuloženého návrhu faktury. Toto připojení nevystavuje faktury, nemění historii a neodesílá zprávy.</p><p>Přihlášení platí nejvýše 30 dní. Přístup lze odvolat. Heslo zůstane pouze na této doméně fakturace a nebude předáno ChatGPT.</p><form method="post" action="${AUTH}authorize"><input type="hidden" name="request" value="${escape(form)}"><p><label>Přístupový klíč aplikace fakturace <input type="password" name="owner_key" autocomplete="off" required maxlength="1024"></label></p><button type="submit">Povolit kontrolu a návrhy faktur</button></form></html>`;
         // no-referrer makes Chromium send Origin:null on an HTML form POST.
         // Keep same-origin Origin validation; allow only the public origin as referrer.
-        return new Response(html,{headers:{...base,'Referrer-Policy':'strict-origin','Content-Type':'text/html; charset=utf-8','Set-Cookie':`${COOKIE}=${nonce}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`}});
+        const cookieName=COOKIE+'-'+hash(nonce).slice(0,16);
+        return new Response(html,{headers:{...base,'Content-Security-Policy':`default-src 'none'; form-action 'self' ${CALLBACK}; frame-ancestors 'none'; base-uri 'none'`,'Referrer-Policy':'strict-origin','Content-Type':'text/html; charset=utf-8','Set-Cookie':`${cookieName}=${nonce}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`}});
       }
       if (url.pathname === '/api/ttf-oauth/authorize' && req.method === 'POST') {
-        if(req.headers.get('origin')!==ORIGIN || !(req.headers.get('content-type') || '').startsWith('application/x-www-form-urlencoded')) return failure('invalid_request',403);
-        const p = new URLSearchParams(await readBody(req)); if(p.getAll('request').length!==1 || p.getAll('owner_key').length!==1) return failure('invalid_request');
-        const form = verify(p.get('request'),'form');
-        const cookie=(req.headers.get('cookie') || '').split(';').map(x=>x.trim()).find(x=>x.startsWith(COOKIE+'='))?.slice(COOKIE.length+1);
-        if(!equal(cookie,form.nonce)) return failure('invalid_request',403);
+        if(req.headers.get('origin')!==ORIGIN || !(req.headers.get('content-type') || '').startsWith('application/x-www-form-urlencoded')) return loginError('invalid_form_origin','Formulář nebyl odeslán ze správné stránky.',403);
+        const p = new URLSearchParams(await readBody(req)); if(p.getAll('request').length!==1 || p.getAll('owner_key').length!==1) return loginError('invalid_form_fields','Formulář neobsahuje všechny potřebné údaje.');
+        let form; try { form=verify(p.get('request'),'form'); } catch { return loginError('expired_login_form','Platnost tohoto přihlašovacího formuláře vypršela.'); }
+        const cookieName=COOKIE+'-'+hash(form.nonce).slice(0,16);
+        const cookie=(req.headers.get('cookie') || '').split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName+'='))?.slice(cookieName.length+1);
+        if(!equal(cookie,form.nonce)) return loginError('login_cookie_mismatch','Chybí relace tohoto přihlašovacího okna. Povolte cookies pro stránku fakturace a otevřete nové přihlášení.',403);
         const store=await storeProvider();
-        try { await limitAttempts(store,context.ip); } catch { return failure('too_many_attempts',429); }
-        if(!equal(p.get('owner_key'),getSecret())) return failure('access_denied',403);
+        try { await limitAttempts(store,context.ip); } catch { return loginError('too_many_attempts','Bylo provedeno příliš mnoho pokusů. Další přihlášení zkuste za 15 minut.',429); }
+        if(!equal(p.get('owner_key'),getSecret())) return loginError('access_denied','Zadaný klíč neodpovídá přístupovému klíči aplikace. V Netlify ověřte hodnotu FAKTURA_TOKEN pro Production.',403);
         // Consent nonce and authorization code can each be used only once.
-        if(!(await store.setJSON('consent/'+hash(form.nonce),{expires:now()+600},{onlyIfNew:true})).modified) return failure('invalid_request');
+        if(!(await store.setJSON('consent/'+hash(form.nonce),{expires:now()+600},{onlyIfNew:true})).modified) return loginError('login_form_already_used','Tento přihlašovací formulář již byl potvrzen.');
         const sid=random(), expires=now()+30*86400;
         if(!(await store.setJSON('session/'+sid,{expires,codeUsed:false,refreshHash:null,revoked:false},{onlyIfNew:true})).modified) return failure('temporarily_unavailable',503);
         const code=sign('code',{sid,client_id:form.client_id,redirect_uri:form.redirect_uri,challenge:form.code_challenge,aud:form.resource,scope:form.scope},120);
         const target=new URL(CALLBACK); target.searchParams.set('code',code); target.searchParams.set('state',form.state); target.searchParams.set('iss',ORIGIN);
-        return new Response(null,{status:303,headers:{...base,Location:target.href,'Set-Cookie':`${COOKIE}=; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`}});
+        return new Response(null,{status:303,headers:{...base,Location:target.href,'Set-Cookie':`${cookieName}=; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`}});
       }
       if (['/api/ttf-oauth/token','/api/ttf-oauth/revoke'].includes(url.pathname) && req.method === 'POST') {
         if(!(req.headers.get('content-type') || '').startsWith('application/x-www-form-urlencoded')) return failure('invalid_request');
