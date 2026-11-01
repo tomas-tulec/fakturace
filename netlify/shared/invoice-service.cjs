@@ -69,8 +69,15 @@ function createService({store,api,render=createPdf,now=()=>new Date().toISOStrin
   }
   async function exportPdf(id) {
     if(!/^[a-f0-9]{64}$/.test(id))throw Error('Neplatné ID faktury.');const item=await read(id);if(!item||item.data.status!=='ready')throw Error('Faktura není dokončená.');
+    const history=await api('faktura-historie','GET',undefined,item.data.data.vystaveno.slice(0,4));
+    const current=history.faktury?.find(row=>String(row.cislo)===String(item.data.number));
+    if(!current||JSON.stringify(stableData(item.data.data,item.data.number))!==JSON.stringify({cislo:String(current.cislo),odberatel:current.odberatel,castka:current.castka,datumVystaveni:current.datumVystaveni,datumSplatnosti:current.datumSplatnosti,polozky:current.polozky}))throw Error('Faktura v původní aplikaci byla změněna nebo odstraněna. Staré PDF nelze znovu exportovat.');
     const bytes=Buffer.from(item.data.pdf,'base64');if(digest(bytes)!==item.data.sha256)throw Error('Nesouhlasí kontrolní součet PDF.');return {bytes,filename:'Faktura_'+item.data.number+'.pdf',number:item.data.number,sha256:item.data.sha256};
   }
-  return {prepare,issue,exportPdf};
+  async function reserveDriveId(id,generate) {
+    for(let i=0;i<6;i++){const item=await read(id);if(!item||item.data.status!=='ready')throw Error('Faktura není dokončená.');if(item.data.driveFileId)return item.data.driveFileId;const fileId=await generate();if(!/^[A-Za-z0-9_-]{10,200}$/.test(fileId))throw Error('Neplatné ID Disku.');if((await store.setJSON('invoice/'+id,{...item.data,driveFileId:fileId},{onlyIfMatch:item.etag})).modified)return fileId;}
+    throw Error('Nelze rezervovat soubor Disku.');
+  }
+  return {prepare,issue,exportPdf,reserveDriveId};
 }
 module.exports={validateInput,stableData,fingerprint,pdfData,legacyApi,createService};

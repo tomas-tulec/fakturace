@@ -32,6 +32,7 @@ function createTools({sign,verify,getSecret,storeProvider=invoiceStore,now=()=>n
    return fileResult('Faktura_'+info.cislo+'.pdf',ORIGIN+'/api/ttf-invoice-file?t='+encodeURIComponent(ticket),info);
  }
  async function file(ticket){const p=verify(ticket,'invoice-file');return {...await(await service()).exportPdf(p.id),sid:p.sid};}
- return {call,file};
+ async function saveToDrive(id,google){const invoices=await service(),pdf=await invoices.exportPdf(id),fileId=await invoices.reserveDriveId(id,()=>google.generateDriveId());return google.uploadPdf(pdf.bytes,pdf.filename,fileId);}
+ return {call,file,saveToDrive};
 }
 module.exports={TOOLS,ISSUE_SCOPE,createTools,createPdf,testData};
