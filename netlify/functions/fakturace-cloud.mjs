@@ -21,8 +21,18 @@ const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(d
 const failure = (error, status = 400) => json({error}, status);
 const challenge = () => json({ error:'authorization_required' }, 401, {'WWW-Authenticate':`Bearer resource_metadata="${META}", scope="${SCOPE}"`});
 async function getStore() { const { getStore } = await import('@netlify/blobs'); return getStore({name:'ttf-oauth-sessions-v1', consistency:'strong'}); }
+export async function readLiveNumber(secret, fetcher = fetch) {
+  // Invoke the existing Lambda through its own route so Netlify injects its real
+  // Blobs context. A fabricated Lambda event must not replace that context.
+  const response=await fetcher(ORIGIN+'/.netlify/functions/faktura-cislo',{method:'GET',headers:{'x-faktura-token':secret},redirect:'error',signal:AbortSignal.timeout(8000)});
+  if(!response.ok) throw Error('number unavailable');
+  const number=(await response.json()).dalsi;
+  if(!Number.isSafeInteger(number) || number<260000 || number>=999000) throw Error('invalid number');
+  return number;
+}
 
-export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || '', storeProvider = getStore, now = () => Math.floor(Date.now()/1000), bridgeHandler = bridge.handler} = {}) {
+export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || '', storeProvider = getStore, now = () => Math.floor(Date.now()/1000), bridgeHandler} = {}) {
+  const invoiceBridge=bridgeHandler || bridge._test.createHandler({getSecret,readNumber:(_event,secret)=>readLiveNumber(secret)});
   function sign(type, data, seconds) {
     const payload = Buffer.from(JSON.stringify({...data, typ:type, iss:ORIGIN, iat:now(), exp:now()+seconds})).toString('base64url');
     return `TTF1.${payload}.${crypto.createHmac('sha256', getSecret()).update('ttf-oauth-v1.'+payload).digest('base64url')}`;
@@ -88,7 +98,7 @@ export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || ''
         const store=await storeProvider();
         try { await session(store,token.sid); } catch { return challenge(); }
         if(req.method!=='POST') return json({error:'Use POST'},405,{Allow:'POST'});
-        const response = await bridgeHandler({httpMethod:'POST',headers:{'content-type':req.headers.get('content-type') || '', 'mcp-protocol-version':req.headers.get('mcp-protocol-version') || '', 'x-faktura-token':getSecret()},body:await readBody(req)});
+        const response = await invoiceBridge({httpMethod:'POST',headers:{'content-type':req.headers.get('content-type') || '', 'mcp-protocol-version':req.headers.get('mcp-protocol-version') || '', 'x-faktura-token':getSecret()},body:await readBody(req)});
         return new Response(response.body || null,{status:response.statusCode,headers:{...base,...response.headers}});
       }
       if (url.pathname === '/api/ttf-oauth/authorize' && req.method === 'GET') {
