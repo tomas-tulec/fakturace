@@ -18,6 +18,10 @@ test('probe echoes a fresh marker without business access', async () => {
   const content = JSON.parse(body.result.content[0].text);
   assert.equal(content.challenge, 'TEST_20261101_a1');
   assert.equal(content.businessAccess, false);
+  assert.equal(content.pdfCheck.validHeader, true);
+  assert.equal(content.pdfCheck.testOnly, true);
+  assert.ok(content.pdfCheck.bytes > 1000);
+  assert.match(content.pdfCheck.sha256, /^[a-f0-9]{64}$/);
 });
 test('rejects unknown tools and extra fields instead of processing business data', async () => {
   for (const params of [
