@@ -69,8 +69,10 @@ exports.handler = async function (event) {
           Object.keys(args).some(k => k !== 'challenge') || typeof args.challenge !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(args.challenge)) {
         return reply(200, error(request.id, -32602, 'Invalid tool or challenge; use only a non-sensitive test marker'));
       }
+      const pdf = require('./rezervace-test-pdf').generateTestPdf();
+      const pdfCheck = { bytes: pdf.length, sha256: require('node:crypto').createHash('sha256').update(pdf).digest('hex'), validHeader: pdf.subarray(0, 8).toString('ascii') === '%PDF-1.4', testOnly: true, path: '/.netlify/functions/rezervace-test-pdf' };
       result = {
-        content: [{ type: 'text', text: JSON.stringify({ ok: true, challenge: args.challenge, execution: 'netlify-function', businessAccess: false, version: '0.1.0' }) }],
+        content: [{ type: 'text', text: JSON.stringify({ ok: true, challenge: args.challenge, execution: 'netlify-function', businessAccess: false, version: '0.1.1', pdfCheck }) }],
         isError: false,
       };
       break;
