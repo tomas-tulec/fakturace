@@ -105,7 +105,9 @@ export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || ''
         let p; try { p=authorization(url.searchParams); } catch { return failure('invalid_request'); }
         const nonce=random(), form=sign('form',{...p,nonce},600);
         const html=`<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Připojení fakturace Tulec Trend</title><h1>Připojit fakturaci k ChatGPT</h1><p>Povolíte kontrolu dalšího čísla a přípravu neuloženého návrhu faktury. Toto připojení nevystavuje faktury, nemění historii a neodesílá zprávy.</p><p>Přihlášení platí nejvýše 30 dní. Přístup lze odvolat. Heslo zůstane pouze na této doméně fakturace a nebude předáno ChatGPT.</p><form method="post" action="${AUTH}authorize"><input type="hidden" name="request" value="${escape(form)}"><p><label>Přístupový klíč aplikace fakturace <input type="password" name="owner_key" autocomplete="off" required maxlength="1024"></label></p><button type="submit">Povolit kontrolu a návrhy faktur</button></form></html>`;
-        return new Response(html,{headers:{...base,'Content-Type':'text/html; charset=utf-8','Set-Cookie':`${COOKIE}=${nonce}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`}});
+        // no-referrer makes Chromium send Origin:null on an HTML form POST.
+        // Keep same-origin Origin validation; allow only the public origin as referrer.
+        return new Response(html,{headers:{...base,'Referrer-Policy':'strict-origin','Content-Type':'text/html; charset=utf-8','Set-Cookie':`${COOKIE}=${nonce}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`}});
       }
       if (url.pathname === '/api/ttf-oauth/authorize' && req.method === 'POST') {
         if(req.headers.get('origin')!==ORIGIN || !(req.headers.get('content-type') || '').startsWith('application/x-www-form-urlencoded')) return failure('invalid_request',403);
