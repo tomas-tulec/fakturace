@@ -1,5 +1,8 @@
 import crypto from 'node:crypto';
 import bridge from './fakturace-mcp.js';
+import invoices from '../shared/invoice-tools.cjs';
+import googleModule from '../shared/google-bridge.cjs';
+import workflow from '../shared/workflow-tools.cjs';
 
 // Owner-only OAuth gateway. No Google credentials, invoice writes or customer messages.
 export const ORIGIN = 'https://fakturace-tulec-trend-foto.netlify.app';
@@ -11,7 +14,9 @@ const META = ORIGIN + '/.well-known/oauth-protected-resource';
 const AUTH = ORIGIN + '/api/ttf-oauth/';
 const COOKIE = '__Host-ttf-oauth';
 const MAX_BODY = 16384;
-export const config = { path: ['/api/ttf-mcp', '/api/ttf-oauth/:action', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/api/ttf-mcp'] };
+export const config = { path: ['/api/ttf-mcp', '/api/ttf-oauth/:action', '/api/ttf-google/:action', '/api/ttf-test-invoice.pdf', '/api/ttf-invoice-file', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/api/ttf-mcp'] };
+const SUPPORTED_SCOPES=[SCOPE,invoices.ISSUE_SCOPE,workflow.RESERVATION_SCOPE];
+function normalizeScope(value) { const parts=typeof value==='string'?value.trim().split(/\s+/):[];if(!parts.includes(SCOPE)||new Set(parts).size!==parts.length||parts.some(s=>!SUPPORTED_SCOPES.includes(s)))throw Error('invalid scope');return SUPPORTED_SCOPES.filter(s=>parts.includes(s)).join(' '); }
 const hash = value => crypto.createHash('sha256').update(value).digest('base64url');
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && crypto.timingSafeEqual(Buffer.from(hash(a)), Buffer.from(hash(b)));
 const random = () => crypto.randomBytes(32).toString('base64url');
@@ -49,7 +54,8 @@ export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || ''
   function authorization(params) {
     for (const key of ['client_id','redirect_uri','response_type','code_challenge','code_challenge_method','resource','scope','state']) if (params.getAll(key).length !== 1) throw Error('invalid request');
     const p = Object.fromEntries(params);
-    if (p.client_id !== CLIENT || p.redirect_uri !== CALLBACK || p.response_type !== 'code' || p.code_challenge_method !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(p.code_challenge) || p.resource !== RESOURCE || p.scope !== SCOPE || !p.state || p.state.length>2048) throw Error('invalid request');
+    if (p.client_id !== CLIENT || p.redirect_uri !== CALLBACK || p.response_type !== 'code' || p.code_challenge_method !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(p.code_challenge) || p.resource !== RESOURCE || !p.state || p.state.length>2048) throw Error('invalid request');
+    p.scope=normalizeScope(p.scope);
     return Object.fromEntries(['client_id','redirect_uri','code_challenge','resource','scope','state'].map(k=>[k,p[k]]));
   }
   async function readBody(req) {
@@ -80,32 +86,59 @@ export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || ''
     throw Error('revocation conflict');
   }
   function issueTokens(sid, data, refresh, expires) {
-    return { access_token:sign('access',{sid, client_id:CLIENT, aud:RESOURCE, scope:SCOPE},600), token_type:'Bearer', expires_in:600, scope:SCOPE, refresh_token:sign('refresh',{sid,nonce:refresh,client_id:CLIENT,aud:RESOURCE,scope:SCOPE},Math.max(1,expires-now())) };
+    return { access_token:sign('access',{sid, client_id:CLIENT, aud:RESOURCE, scope:data.scope},600), token_type:'Bearer', expires_in:600, scope:data.scope, refresh_token:sign('refresh',{sid,nonce:refresh,client_id:CLIENT,aud:RESOURCE,scope:data.scope},Math.max(1,expires-now())) };
   }
+  const invoiceTools=invoices.createTools({sign,verify,getSecret,now:()=>new Date(now()*1000).toISOString()});
+  const google=googleModule.createGoogleBridge({sign,verify,getSecret,now,checkSession:async sid=>session(await storeProvider(),sid)});
+  const workflowTools=workflow.createWorkflowTools({google,invoiceTools,sign,verify});
   return async (req, context = {}) => {
     const url = new URL(req.url);
     if (url.origin !== ORIGIN) return failure('invalid_host',400);
     if (req.method === 'OPTIONS') return new Response(null,{status:204,headers:{...base,'Access-Control-Allow-Origin':'https://chatgpt.com','Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Allow-Headers':'Authorization, Content-Type, MCP-Protocol-Version'}});
-    if (url.pathname === '/.well-known/oauth-authorization-server' && req.method === 'GET') return json({issuer:ORIGIN, authorization_endpoint:AUTH+'authorize', token_endpoint:AUTH+'token', revocation_endpoint:AUTH+'revoke', response_types_supported:['code'], grant_types_supported:['authorization_code','refresh_token'], token_endpoint_auth_methods_supported:['none'], code_challenge_methods_supported:['S256'], scopes_supported:[SCOPE], authorization_response_iss_parameter_supported:true});
-    if (['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/api/ttf-mcp'].includes(url.pathname) && req.method === 'GET') return json({resource:RESOURCE,authorization_servers:[ORIGIN],scopes_supported:[SCOPE],bearer_methods_supported:['header'],resource_name:'Tulec Trend - kontrola a navrh faktury'});
+    if (url.pathname === '/.well-known/oauth-authorization-server' && req.method === 'GET') return json({issuer:ORIGIN, authorization_endpoint:AUTH+'authorize', token_endpoint:AUTH+'token', revocation_endpoint:AUTH+'revoke', response_types_supported:['code'], grant_types_supported:['authorization_code','refresh_token'], token_endpoint_auth_methods_supported:['none'], code_challenge_methods_supported:['S256'], scopes_supported:SUPPORTED_SCOPES, authorization_response_iss_parameter_supported:true});
+    if (['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/api/ttf-mcp'].includes(url.pathname) && req.method === 'GET') return json({resource:RESOURCE,authorization_servers:[ORIGIN],scopes_supported:SUPPORTED_SCOPES,bearer_methods_supported:['header'],resource_name:'Tulec Trend - fakturace a rezervace'});
+    if(url.pathname==='/api/ttf-test-invoice.pdf'&&req.method==='GET'){const bytes=invoices.createPdf(invoices.testData());return new Response(bytes,{headers:{...base,'Content-Type':'application/pdf','Content-Disposition':'inline; filename="TEST_cloud_original_NEHRADIT.pdf"'}});}
     // A weak/unset owner key must never enable authorization or tool execution.
     if (getSecret().length < 24) return failure('server_not_configured',503);
     if (req.headers.get('origin') && ![ORIGIN,'https://chatgpt.com'].includes(req.headers.get('origin'))) return failure('invalid_origin',403);
     try {
+      if(url.pathname.startsWith('/api/ttf-google/'))return await google.web(req);
+      if(url.pathname==='/api/ttf-invoice-file'&&req.method==='GET') {
+        let ticket;try{ticket=verify(url.searchParams.get('t'),'invoice-file');await session(await storeProvider(),ticket.sid);}catch{return challenge();}
+        const file=await invoiceTools.file(url.searchParams.get('t'));
+        return new Response(file.bytes,{headers:{...base,'Content-Type':'application/pdf','Content-Disposition':'attachment; filename="'+file.filename+'"'}});
+      }
       if (url.pathname === '/api/ttf-mcp') {
         let token;
-        try { token=verify((req.headers.get('authorization') || '').replace(/^Bearer /i,''),'access'); if(token.aud!==RESOURCE || token.scope!==SCOPE || token.client_id!==CLIENT) throw Error('wrong audience'); }
+        try { token=verify((req.headers.get('authorization') || '').replace(/^Bearer /i,''),'access'); if(token.aud!==RESOURCE || normalizeScope(token.scope)!==token.scope || token.client_id!==CLIENT) throw Error('wrong audience'); }
         catch { return challenge(); }
         const store=await storeProvider();
         try { await session(store,token.sid); } catch { return challenge(); }
         if(req.method!=='POST') return json({error:'Use POST'},405,{Allow:'POST'});
-        const response = await invoiceBridge({httpMethod:'POST',headers:{'content-type':req.headers.get('content-type') || '', 'mcp-protocol-version':req.headers.get('mcp-protocol-version') || '', 'x-faktura-token':getSecret()},body:await readBody(req)});
+        if(!(req.headers.get('content-type')||'').toLowerCase().startsWith('application/json'))return failure('use_application_json',415);
+        const body=await readBody(req);let rpc;try{rpc=JSON.parse(body);}catch{}
+        if(rpc?.method==='tools/call'&&[...invoices.TOOLS,...workflow.TOOLS].some(t=>t.name===rpc.params?.name)) {
+          if(rpc.jsonrpc!=='2.0'||!Object.hasOwn(rpc,'id'))return failure('invalid_request');
+          let result;try{result=await invoiceTools.call(rpc.params.name,rpc.params.arguments||{},token)||await workflowTools.call(rpc.params.name,rpc.params.arguments||{},token);}catch(error){result={content:[{type:'text',text:String(error.message||'Operaci nelze dokončit.')}],isError:true};}
+          if(result?.needsScope)return json({error:'insufficient_scope'},401,{'WWW-Authenticate':`Bearer resource_metadata="${META}", scope="${SCOPE} ${result.needsScope}", error="insufficient_scope"`});
+          return json({jsonrpc:'2.0',id:rpc.id,result});
+        }
+        const response = await invoiceBridge({httpMethod:'POST',headers:{'content-type':req.headers.get('content-type') || '', 'mcp-protocol-version':req.headers.get('mcp-protocol-version') || '', 'x-faktura-token':getSecret()},body});
+        if(response.statusCode===200&&['tools/list','initialize'].includes(rpc?.method)) {
+          const envelope=JSON.parse(response.body);
+          if(rpc.method==='tools/list'&&envelope.result?.tools)envelope.result.tools.push(...invoices.TOOLS,...workflow.TOOLS);
+          if(rpc.method==='initialize'&&envelope.result){envelope.result.serverInfo.version='0.3.0';envelope.result.instructions='Pracuj česky podle pokynů projektu. Základní přístup čte číslo a návrhy. Vystavení a rezervace vyžadují oddělené rozsahy a výslovné schválení konkrétního návrhu i akcí. Opakovaný export nepřiděluje číslo. Testovací rezervace se nikdy neukládá. Google účty ověřuj, používej jen tulectrendfoto@gmail.com.';}
+          response.body=JSON.stringify(envelope);
+        }
         return new Response(response.body || null,{status:response.statusCode,headers:{...base,...response.headers}});
       }
       if (url.pathname === '/api/ttf-oauth/authorize' && req.method === 'GET') {
         let p; try { p=authorization(url.searchParams); } catch { return failure('invalid_request'); }
         const nonce=random(), form=sign('form',{...p,nonce},600);
-        const html=`<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Připojení fakturace Tulec Trend</title><h1>Připojit fakturaci k ChatGPT</h1><p>Povolíte kontrolu dalšího čísla a přípravu neuloženého návrhu faktury. Toto připojení nevystavuje faktury, nemění historii a neodesílá zprávy.</p><p>Přihlášení platí nejvýše 30 dní. Přístup lze odvolat. Heslo zůstane pouze na této doméně fakturace a nebude předáno ChatGPT.</p><form method="post" action="${AUTH}authorize"><input type="hidden" name="request" value="${escape(form)}"><p><label>Přístupový klíč aplikace fakturace <input type="password" name="owner_key" autocomplete="off" required maxlength="1024"></label></p><button type="submit">Povolit kontrolu a návrhy faktur</button></form></html>`;
+        const issue=p.scope.split(' ').includes(invoices.ISSUE_SCOPE);
+        const reservations=p.scope.split(' ').includes(workflow.RESERVATION_SCOPE);
+        const permissions=(issue?'Povolíte kontrolu historie, návrhy a skutečné vystavení faktury se zápisem čísla, historie a PDF. PDF lze uložit na firemní Disk. ':'')+(reservations?'Povolíte návrhy a ukládání rezervací se skutečnou přílohou a případné odeslání pozvánek. ':'');
+        const html=`<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Připojení fakturace Tulec Trend</title><h1>Připojit administrativu k ChatGPT</h1><p>${permissions||'Povolíte kontrolu dalšího čísla a přípravu neuloženého návrhu faktury. Tento základní přístup nevystavuje faktury, nemění historii a neodesílá zprávy.'}</p><p>Každý konkrétní návrh a jeho uložení, vystavení, export či odeslání pozvánek musí Tomáš výslovně schválit. Přihlášení samo žádnou objednávku nezpracuje.</p><p>Přihlášení platí nejvýše 30 dní. Přístup lze odvolat. Heslo zůstane pouze na této doméně fakturace a nebude předáno ChatGPT.</p><form method="post" action="${AUTH}authorize"><input type="hidden" name="request" value="${escape(form)}"><p><label>Přístupový klíč aplikace fakturace <input type="password" name="owner_key" autocomplete="off" required maxlength="1024"></label></p><button type="submit">${issue||reservations?'Povolit vybrané akce po schválení jednotlivých návrhů':'Povolit kontrolu a návrhy faktur'}</button></form></html>`;
         // no-referrer makes Chromium send Origin:null on an HTML form POST.
         // Keep same-origin Origin validation; allow only the public origin as referrer.
         const cookieName=COOKIE+'-'+hash(nonce).slice(0,16);
@@ -143,7 +176,7 @@ export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || ''
           }
           return json({});
         }
-        if(p.get('resource')!==RESOURCE || (p.has('scope') && p.get('scope')!==SCOPE)) return failure('invalid_target');
+        if(p.get('resource')!==RESOURCE) return failure('invalid_target');
         let data,item;
         try {
           if(p.get('grant_type')==='authorization_code') {
@@ -154,7 +187,7 @@ export function createHandler({getSecret = () => process.env.FAKTURA_TOKEN || ''
             data=verify(p.get('refresh_token'),'refresh'); item=await session(store,data.sid);
             if(!equal(item.data.refreshHash,hash(data.nonce))) { await revokeSession(store,data.sid); throw Error('refresh replay'); }
           } else return failure('unsupported_grant_type');
-          if(data.client_id!==CLIENT || data.aud!==RESOURCE || data.scope!==SCOPE) throw Error('invalid grant');
+          if(data.client_id!==CLIENT || data.aud!==RESOURCE || normalizeScope(data.scope)!==data.scope || (p.has('scope')&&normalizeScope(p.get('scope'))!==data.scope)) throw Error('invalid grant');
           const next=random();
           if(!(await store.setJSON('session/'+data.sid,{...item.data,codeUsed:true,refreshHash:hash(next)},{onlyIfMatch:item.etag})).modified) throw Error('grant already used');
           return json(issueTokens(data.sid,data,next,item.data.expires));
