@@ -2,6 +2,7 @@
 const crypto=require('node:crypto');
 const {validDate}=require('../functions/fakturace-mcp.js')._test;
 const JANA='janatulda@gmail.com';
+const PHOTO_LABEL_ID='8DA3AB83-F880-40F8-9327-FE78EAB4DAC4'; // Foto rezervace, #000000 on the business primary calendar.
 const hash=x=>crypto.createHash('sha256').update(JSON.stringify(x)).digest('hex');
 function validTime(value){if(typeof value!=='string'||!/^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:00\+0[12]:00$/.test(value)||!validDate(value.slice(0,10))||!Number.isFinite(Date.parse(value)))return false;const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Prague',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value));const p=Object.fromEntries(parts.map(x=>[x.type,x.value]));return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:00`===value.slice(0,19);}
 function validate(raw){const common=['title','clientEmail','location','start','end','sendInvitations','description'];if(!raw||typeof raw!=='object'||Array.isArray(raw)||common.some(k=>!Object.hasOwn(raw,k))||Object.keys(raw).some(k=>![...common,'attachment','attachments'].includes(k))||Boolean(raw.attachment)===Boolean(raw.attachments))throw Error('Complete reservation details required.');
@@ -15,7 +16,7 @@ function validate(raw){const common=['title','clientEmail','location','start','e
  return {...Object.fromEntries(common.map(k=>[k,raw[k]])),attachments};
 }
 function selfTest(data){return data.title==='ZKUŠEBNÍ REZERVACE – KONTROLA'&&data.clientEmail.toLowerCase()==='tulectrendfoto@gmail.com'&&data.location==='Zkušební místo'&&data.description.startsWith('TEST:');}
-function eventData(data){return {summary:data.title,location:data.location,description:data.description,start:{dateTime:data.start,timeZone:'Europe/Prague'},end:{dateTime:data.end,timeZone:'Europe/Prague'},attendees:selfTest(data)?[{email:data.clientEmail}]:[{email:data.clientEmail},{email:JANA}],attachments:data.attachments.map(({fileUrl,title,mimeType})=>({fileUrl,title,mimeType})),reminders:{useDefault:false,overrides:[]},guestsCanModify:false,guestsCanInviteOthers:false};}
+function eventData(data){return {summary:data.title,location:data.location,description:data.description,start:{dateTime:data.start,timeZone:'Europe/Prague'},end:{dateTime:data.end,timeZone:'Europe/Prague'},attendees:selfTest(data)?[{email:data.clientEmail}]:[{email:data.clientEmail},{email:JANA}],attachments:data.attachments.map(({fileUrl,title,mimeType})=>({fileUrl,title,mimeType})),eventLabelId:PHOTO_LABEL_ID,reminders:{useDefault:false,overrides:[]},guestsCanModify:false,guestsCanInviteOthers:false};}
 function createReservationService({google,sign,verify}){
  const idFor=data=>'ttf'+hash(eventData(data));
  async function existing(id){const r=await google.request('calendar','/calendars/primary/events/'+id);if(r.status===404)return null;if(r.status!==200)throw Error('Existující rezervaci nelze ověřit.');return r.data;}
@@ -25,9 +26,9 @@ function createReservationService({google,sign,verify}){
   if(data.clientEmail.toLowerCase().endsWith('.invalid')||/NEUKL[ÁA]DAT/i.test(data.title))throw Error('Testovací návrh rezervace se nikdy neukládá.');
   const previous=await existing(id);if(previous){if(previous.extendedProperties?.private?.ttfFingerprint!==hash(eventData(data)))throw Error('Existující událost má jiný obsah.');return {id,url:previous.htmlLink,opakovani:true,pozvankyZnovuOdeslany:false};}
   await free(data,id);const event={...eventData(data),id,extendedProperties:{private:{ttfFingerprint:hash(eventData(data))}}};
-  const result=await google.request('calendar','/calendars/primary/events?'+new URLSearchParams({supportsAttachments:'true',sendUpdates:data.sendInvitations?'all':'none'}),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(event)});
+  const result=await google.request('calendar','/calendars/primary/events?'+new URLSearchParams({supportsAttachments:'true',eventLabelVersion:'1',sendUpdates:data.sendInvitations?'all':'none'}),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(event)});
   if(result.status===409){const saved=await existing(id);if(saved?.extendedProperties?.private?.ttfFingerprint===hash(eventData(data)))return {id,url:saved.htmlLink,opakovani:true,pozvankyZnovuOdeslany:false};}
-  if(![200,201].includes(result.status))throw Error('Uložení se nepotvrdilo. Opakujte pouze stejný návrh.');return {id,url:result.data.htmlLink,opakovani:false,pozvankyOdeslany:data.sendInvitations,priloha:result.data.attachments||[],pripominkyVypnuty:result.data.reminders?.useDefault===false};
+  if(![200,201].includes(result.status))throw Error('Uložení se nepotvrdilo. Opakujte pouze stejný návrh.');return {id,url:result.data.htmlLink,opakovani:false,pozvankyOdeslany:data.sendInvitations,priloha:result.data.attachments||[],pripominkyVypnuty:result.data.reminders?.useDefault===false,cernaBarvaPotvrzena:result.data.eventLabelId===PHOTO_LABEL_ID};
  }
  return {prepare,create};
 }
