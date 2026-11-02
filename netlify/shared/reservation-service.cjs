@@ -14,7 +14,8 @@ function validate(raw){const common=['title','clientEmail','location','start','e
   let url;try{url=new URL(a.fileUrl);}catch{throw Error('Invalid attachment URL.');}if(url.protocol!=='https:'||!['drive.google.com','docs.google.com'].includes(url.hostname)||!url.pathname.includes('/d/'+a.fileId+'/')||url.username||url.password||ids.has(a.fileId))throw Error('Unique verified Drive attachment required.');ids.add(a.fileId);}
  return {...Object.fromEntries(common.map(k=>[k,raw[k]])),attachments};
 }
-function eventData(data){return {summary:data.title,location:data.location,description:data.description,start:{dateTime:data.start,timeZone:'Europe/Prague'},end:{dateTime:data.end,timeZone:'Europe/Prague'},attendees:[{email:data.clientEmail},{email:JANA}],attachments:data.attachments.map(({fileUrl,title,mimeType})=>({fileUrl,title,mimeType})),reminders:{useDefault:false,overrides:[]},guestsCanModify:false,guestsCanInviteOthers:false};}
+function selfTest(data){return data.title==='ZKUŠEBNÍ REZERVACE – KONTROLA'&&data.clientEmail.toLowerCase()==='tulectrendfoto@gmail.com'&&data.location==='Zkušební místo'&&data.description.startsWith('TEST:');}
+function eventData(data){return {summary:data.title,location:data.location,description:data.description,start:{dateTime:data.start,timeZone:'Europe/Prague'},end:{dateTime:data.end,timeZone:'Europe/Prague'},attendees:selfTest(data)?[{email:data.clientEmail}]:[{email:data.clientEmail},{email:JANA}],attachments:data.attachments.map(({fileUrl,title,mimeType})=>({fileUrl,title,mimeType})),reminders:{useDefault:false,overrides:[]},guestsCanModify:false,guestsCanInviteOthers:false};}
 function createReservationService({google,sign,verify}){
  const idFor=data=>'ttf'+hash(eventData(data));
  async function existing(id){const r=await google.request('calendar','/calendars/primary/events/'+id);if(r.status===404)return null;if(r.status!==200)throw Error('Existující rezervaci nelze ověřit.');return r.data;}
@@ -30,4 +31,4 @@ function createReservationService({google,sign,verify}){
  }
  return {prepare,create};
 }
-module.exports={createReservationService,validate,eventData,validTime,JANA};
+module.exports={createReservationService,validate,eventData,validTime,JANA,selfTest};
